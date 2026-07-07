@@ -1,0 +1,275 @@
+/* ==========================================================================
+   Unjess (njss) — Antigravity 2.0 Theme
+   Premium "IDE-style" interface with triple-panel layout.
+   ========================================================================== */
+
+:root {
+    /* Antigravity Colors */
+    --bg-main:          #0d0d0d;
+    --bg-sidebar:       #0d0d0d;
+    --bg-card:          #161616;
+    --bg-surface:       #1e1e1e;
+    --bg-input:         #1c1c1c;
+    
+    --accent:           #7c3aed; /* njss purple */
+    --accent-dim:       #5b21b6;
+    --accent-glow:      rgba(124, 58, 237, 0.1);
+    
+    --border:           #222222;
+    --border-bright:    #333333;
+    
+    --text-primary:     #e5e5e5;
+    --text-secondary:   #9ca3af;
+    --text-muted:       #4b5563;
+    
+    --radius-sm:        4px;
+    --radius-md:        8px;
+    --radius-lg:        12px;
+}
+
+body {
+    background-color: var(--bg-main) !important;
+    color: var(--text-primary);
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   Layout Structure (Triple Panel)
+   -------------------------------------------------------------------------- */
+
+.app-container {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+}
+
+.left-sidebar {
+    width: 240px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+}
+
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-main);
+    overflow: hidden;
+}
+
+.right-sidebar {
+    width: 280px;
+    background: var(--bg-sidebar);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+}
+
+/* --------------------------------------------------------------------------
+   Breadcrumbs & Header
+   -------------------------------------------------------------------------- */
+
+.breadcrumb-header {
+    height: 48px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 8px;
+    font-size: 0.85rem;
+}
+
+.breadcrumb-root { color: var(--text-muted); }
+.breadcrumb-sep { color: var(--text-muted); font-size: 0.7rem; }
+.breadcrumb-current { color: var(--text-secondary); font-weight: 500; }
+
+/* --------------------------------------------------------------------------
+   Antigravity-Style Chat Cards
+   -------------------------------------------------------------------------- */
+
+.chat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    margin-bottom: 16px;
+    width: 100%;
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+    transition: border-color 0.2s ease;
+}
+
+.chat-card:hover {
+    border-color: var(--border-bright);
+}
+
+.chat-card .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.chat-card .content {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------------------
+   Input Bar (Antigravity Style)
+   -------------------------------------------------------------------------- */
+
+.floating-input-container {
+    padding: 16px 24px;
+    max-width: 800px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.antigravity-input {
+    background: var(--bg-input) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-lg) !important;
+    padding: 4px 12px !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.antigravity-input:focus-within {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.hidden, .q-uploader--hidden {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    width: 0 !important;
+    overflow: hidden !important;
+    position: absolute !important;
+    pointer-events: none !important;
+}
+
+.model-status-label {
+    padding-top: 4px;
+    padding-bottom: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Sidebar Components
+   -------------------------------------------------------------------------- */
+
+.sidebar-item {
+    padding: 8px 12px;
+    margin: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.sidebar-item:hover {
+    background: #1a1a1a;
+    color: var(--text-primary);
+}
+
+.sidebar-item.active {
+    background: #222;
+    color: var(--text-primary);
+}
+
+.sidebar-section-header {
+    padding: 16px 12px 8px 16px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------------------
+   AG-Style Trace View (Thinking + Tool Call Steps)
+   -------------------------------------------------------------------------- */
+
+.trace-container {
+    gap: 2px !important;
+}
+
+.trace-step {
+    position: relative;
+}
+
+/* Thinking step styling */
+.trace-thinking .q-expansion-item__container {
+    background: transparent !important;
+}
+
+.trace-thinking .q-item {
+    padding: 4px 0 !important;
+    min-height: 28px !important;
+}
+
+/* Tool call step styling */
+.trace-tool .q-expansion-item__container {
+    background: rgba(255, 255, 255, 0.02) !important;
+    border-radius: 6px !important;
+    border: 1px solid rgba(255, 255, 255, 0.04) !important;
+    transition: border-color 0.15s ease;
+}
+
+.trace-tool .q-expansion-item__container:hover {
+    border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.trace-tool .q-item {
+    padding: 6px 8px !important;
+    min-height: 32px !important;
+}
+
+/* Status colors */
+.trace-tool-running .q-item__label {
+    color: #64b5f6 !important;
+}
+
+.trace-tool-complete .q-item__label {
+    color: #c9d1d9 !important;
+}
+
+.trace-tool-error .q-item__label {
+    color: #ef5350 !important;
+}
+
+.trace-tool-error .q-expansion-item__container {
+    border-color: rgba(239, 83, 80, 0.15) !important;
+}
+
+/* Smooth expand/collapse animation */
+.trace-step .q-expansion-item__content {
+    transition: max-height 0.15s ease;
+}
+
+/* Tool card overrides for tighter spacing inside trace */
+.trace-step .tool-card .q-item {
+    padding: 4px 8px !important;
+    min-height: 28px !important;
+}
+
+/* --------------------------------------------------------------------------
+   Quasar Overrides for Dark Mode
+   -------------------------------------------------------------------------- */
+
+.q-field--outlined .q-field__control:before { border-color: var(--border) !important; }
+.q-field--focused .q-field__control:after { border-color: var(--accent) !important; }
+.q-drawer { background: var(--bg-sidebar) !important; }
+.q-header { background: var(--bg-main) !important; border-bottom: 1px solid var(--border) !important; }

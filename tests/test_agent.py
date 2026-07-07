@@ -1,0 +1,425 @@
+"""Tests for unjess.agent — the core agent loop."""
+
+import pytest
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch, PropertyMock
+from collections import deque
+
+from unjess.agent import Agent, _MAX_TOOL_RETRIES, _STUCK_WINDOW, _PARALLEL_SAFE_TOOLS
+from unjess.config import Settings
+from unjess.llm.base import LLMResponse, ToolCall, Usage
+from unjess.tools import ToolRegistry
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_settings(**overrides: Any) -> Settings:
+    """Create a Settings with sensible test defaults."""
+    defaults = {
+        "model": "test-model",
+        "provider": "openai",
+        "workspace": ".",
+        "max_iterations": 5,
+    }
+    defaults.update(overrides)
+    s = Settings()
+    for k, v in defaults.items():
+        setattr(s, k, v)
+    return s
+
+
+def _make_agent(
+    settings: Settings | None = None,
+    **kwargs: Any,
+) -> Agent:
+    """Create an Agent with fully mocked dependencies."""
+    if settings is None:
+        settings = _make_settings()
+
+    router = MagicMock()
+    tools = kwargs.pop("tool_registry", ToolRegistry())
+    display = MagicMock()
+    permissions = MagicMock()
+    permissions.check.return_value = True
+
+    # Suppress heavy init by marking as child agent
+    return Agent(
+        settings=settings,
+        router=router,
+        tool_registry=tools,
+        display=display,
+        permissions=permissions,
+        _is_child=True,  # skip model_router/architect/subagent init
+        **kwargs,
+    )
+
+
+# ===================================================================
+# Construction
+# ===================================================================
+
+class TestAgentConstruction:
+    """Tests for Agent.__init__."""
+
+    def test_child_agent_skips_heavy_init(self) -> None:
+        agent = _make_agent()
+        assert agent._model_router is None
+        assert agent._architect is None
+        assert agent._subagent_manager is None
+
+    def test_max_iterations_from_settings(self) -> None:
+        s = _make_settings(max_iterations=42)
+        agent = _make_agent(settings=s)
+        assert agent._max_iterations == 42
+
+    def test_max_iterations_explicit_override(self) -> None:
+        s = _make_settings(max_iterations=42)
+        agent = _make_agent(settings=s, _max_iterations=99)
+        assert agent._max_iterations == 99
+
+    def test_conversation_starts_empty(self) -> None:
+        agent = _make_agent()
+        assert agent.conversation == []
+        assert agent.conversation_length == 0
+
+    def test_default_flags(self) -> None:
+        agent = _make_agent()
+        assert agent._planning_mode is False
+        assert agent._goal_mode is False
+        assert agent._abort_requested is False
+
+    def test_context_manager_created_automatically(self) -> None:
+        agent = _make_agent()
+        assert agent._context_manager is not None
+
+    def test_custom_context_manager(self) -> None:
+        cm = MagicMock()
+        agent = _make_agent(context_manager=cm)
+        assert agent._context_manager is cm
+
+
+# ===================================================================
+# Conversation management
+# ===================================================================
+
+class TestConversationManagement:
+    """Tests for conversation property and clear_history."""
+
+    def test_conversation_setter(self) -> None:
+        agent = _make_agent()
+        new_conv = [{"role": "user", "content": "hi"}]
+        agent.conversation = new_conv
+        assert agent.conversation is new_conv
+        assert agent.conversation_length == 1
+
+    def test_clear_history(self) -> None:
+        agent = _make_agent()
+        agent._conversation = [{"role": "user", "content": "test"}]
+        agent._recent_tool_calls.append("read_file")
+        agent.clear_history()
+        assert agent.conversation == []
+        assert len(agent._recent_tool_calls) == 0
+
+    def test_tool_registry_property(self) -> None:
+        reg = ToolRegistry()
+        agent = _make_agent(tool_registry=reg)
+        assert agent.tool_registry is reg
+
+
+# ===================================================================
+# Stuck detection
+# ===================================================================
+
+class TestStuckDetection:
+    """Tests for the _is_stuck method."""
+
+    def test_not_stuck_when_empty(self) -> None:
+        agent = _make_agent()
+        assert agent._is_stuck() is False
+
+    def test_not_stuck_with_varied_calls(self) -> None:
+        agent = _make_agent()
+        agent._recent_tool_calls.extend(["read_file:a", "write_file:b", "grep_search:c"])
+        assert agent._is_stuck() is False
+
+    def test_stuck_when_repeating(self) -> None:
+        agent = _make_agent()
+        # Fill with identical entries beyond the window
+        for _ in range(_STUCK_WINDOW * 2):
+            agent._recent_tool_calls.append("read_file:/same/path")
+        assert agent._is_stuck() is True
+
+    def test_stuck_window_size(self) -> None:
+        agent = _make_agent()
+        # Just under the window — not stuck
+        unique_call = "read_file:/same/path"
+        for _ in range(_STUCK_WINDOW - 1):
+            agent._recent_tool_calls.append(unique_call)
+        agent._recent_tool_calls.append("different_tool:other")
+        assert agent._is_stuck() is False
+
+
+# ===================================================================
+# Constants
+# ===================================================================
+
+class TestConstants:
+    """Tests for module-level constants."""
+
+    def test_max_tool_retries(self) -> None:
+        assert _MAX_TOOL_RETRIES >= 1
+
+    def test_stuck_window(self) -> None:
+        assert _STUCK_WINDOW >= 2
+
+    def test_parallel_safe_tools(self) -> None:
+        assert "read_file" in _PARALLEL_SAFE_TOOLS
+        assert "list_dir" in _PARALLEL_SAFE_TOOLS
+        assert "grep_search" in _PARALLEL_SAFE_TOOLS
+        assert "write_file" not in _PARALLEL_SAFE_TOOLS
+        assert "run_command" not in _PARALLEL_SAFE_TOOLS
+
+
+# ===================================================================
+# System prompt (child agent)
+# ===================================================================
+
+class TestSystemPromptChild:
+    """Tests for _build_full_system_prompt on child agents."""
+
+    def test_child_with_custom_prompt(self) -> None:
+        agent = _make_agent()
+        agent._custom_system_prompt = "You are a helper."
+        prompt = agent._build_full_system_prompt()
+        assert "You are a helper." in prompt
+
+    def test_child_without_custom_prompt_uses_build_system_prompt(self) -> None:
+        agent = _make_agent()
+        agent._custom_system_prompt = ""
+        # Should not crash — falls through to build_system_prompt
+        prompt = agent._build_full_system_prompt()
+        assert isinstance(prompt, str)
+
+
+# ===================================================================
+# Run method (integration-like)
+# ===================================================================
+
+class TestRunBasics:
+    """Lightweight tests for the Agent.run() method."""
+
+    def test_run_text_response_exits_loop(self) -> None:
+        agent = _make_agent()
+        # Mock the streaming to return a simple text response
+        response = LLMResponse(
+            text="Hello!",
+            tool_calls=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=5),
+            model="test-model",
+        )
+        agent._stream_response = MagicMock(return_value=response)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+
+        agent.run("Hello!")
+        assert agent.conversation_length >= 1  # at least the user message
+        assert agent._conversation[0]["content"] == "Hello!"
+
+    def test_run_appends_user_message(self) -> None:
+        agent = _make_agent()
+        response = LLMResponse(
+            text="Reply", tool_calls=[], model="test-model",
+            usage=Usage(prompt_tokens=5, completion_tokens=5),
+        )
+        agent._stream_response = MagicMock(return_value=response)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+
+        agent.run("test input")
+        assert any(
+            m.get("content") == "test input" for m in agent._conversation
+        )
+
+    def test_run_abort_stops_loop(self) -> None:
+        agent = _make_agent()
+
+        # Set abort during the loop via a side effect
+        def set_abort(*a, **kw):
+            agent._abort_requested = True
+            return False
+
+        agent._context_manager.needs_compaction = MagicMock(side_effect=set_abort)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+        agent._stream_response = MagicMock()  # should NOT be called
+
+        agent.run("should abort")
+        # The display should show abort message
+        agent._display.show_info.assert_called()
+
+    def test_run_max_iterations_warning(self) -> None:
+        settings = _make_settings(max_iterations=1)
+        agent = _make_agent(settings=settings)
+
+        # Return tool calls so the loop wants to continue
+        tc = ToolCall(id="tc1", name="read_file", arguments={"path": "x"})
+        response = LLMResponse(
+            text="", tool_calls=[tc], model="test-model",
+            usage=Usage(prompt_tokens=5, completion_tokens=5),
+        )
+        agent._stream_response = MagicMock(return_value=response)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+        agent._handle_tool_calls = MagicMock(return_value=0)
+        agent._is_stuck = MagicMock(return_value=False)
+
+        agent.run("test")
+        agent._display.show_warning.assert_called()
+
+    def test_run_with_logger(self) -> None:
+        agent = _make_agent()
+        logger = MagicMock()
+        agent._logger = logger
+
+        response = LLMResponse(
+            text="Response", tool_calls=[], model="test-model",
+            usage=Usage(prompt_tokens=10, completion_tokens=5),
+        )
+        agent._stream_response = MagicMock(return_value=response)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+
+        agent.run("test")
+        logger.log_user_input.assert_called_once_with("test")
+        logger.log_model_response.assert_called_once()
+
+    def test_run_with_mention_resolver(self) -> None:
+        agent = _make_agent()
+        resolver = MagicMock()
+        resolver.process_message.return_value = ("enriched @file", [])
+        agent._mention_resolver = resolver
+
+        response = LLMResponse(
+            text="Reply", tool_calls=[], model="test-model",
+            usage=Usage(prompt_tokens=5, completion_tokens=5),
+        )
+        agent._stream_response = MagicMock(return_value=response)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+
+        agent.run("check @file.py")
+        resolver.process_message.assert_called_once()
+
+    def test_run_with_undo_checkpoint(self) -> None:
+        agent = _make_agent()
+        undo = MagicMock()
+        agent._undo_manager = undo
+
+        response = LLMResponse(
+            text="Done", tool_calls=[], model="test-model",
+            usage=Usage(prompt_tokens=5, completion_tokens=5),
+        )
+        agent._stream_response = MagicMock(return_value=response)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+
+        agent.run("make changes")
+        undo.checkpoint.assert_called_once()
+
+
+# ===================================================================
+# Error handling in run()
+# ===================================================================
+
+class TestRunErrorHandling:
+    """Tests for error recovery in Agent.run()."""
+
+    def test_run_llm_error_displays_error(self) -> None:
+        agent = _make_agent()
+        agent._stream_response = MagicMock(
+            side_effect=Exception("API Error 500")
+        )
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+
+        agent.run("test")
+        agent._display.show_error.assert_called()
+
+    def test_run_context_length_exceeded_auto_compacts(self) -> None:
+        agent = _make_agent()
+        # First call: context_length_exceeded, second call: success
+        response = LLMResponse(
+            text="OK", tool_calls=[], model="test-model",
+            usage=Usage(prompt_tokens=5, completion_tokens=5),
+        )
+        call_count = [0]
+        def stream_side_effect(*a, **kw):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("context_length_exceeded: too long")
+            return response
+
+        agent._stream_response = MagicMock(side_effect=stream_side_effect)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+        # Pre-fill conversation so truncation is visible
+        agent._conversation = [
+            {"role": "user", "content": f"msg{i}"}
+            for i in range(10)
+        ]
+
+        agent.run("trigger compact")
+        # Should have auto-compacted
+        agent._display.show_info.assert_called()
+
+
+# ===================================================================
+# Cost enforcement
+# ===================================================================
+
+class TestCostEnforcement:
+    """Tests for session cost budget enforcement."""
+
+    def test_cost_limit_stops_agent(self) -> None:
+        settings = _make_settings(max_cost_per_session=0.01)
+        agent = _make_agent(settings=settings)
+
+        logger = MagicMock()
+        logger.cost_tracker.total_cost = 0.05  # over budget
+        agent._logger = logger
+
+        response = LLMResponse(
+            text="Reply", tool_calls=[], model="test-model",
+            usage=Usage(prompt_tokens=10, completion_tokens=5),
+        )
+        agent._stream_response = MagicMock(return_value=response)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+
+        agent.run("expensive request")
+        agent._display.show_warning.assert_called()
+        # Should have mentioned cost in the warning
+        warning_text = agent._display.show_warning.call_args[0][0]
+        assert "cost" in warning_text.lower() or "limit" in warning_text.lower()

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 380" fill="#111827">
+  <!-- U-shaped mark with prongs -->
+  <path d="
+    M 148 40
+    L 148 160
+    Q 148 220, 200 220
+    Q 252 220, 252 160
+    L 252 40
+    L 232 40
+    L 232 60
+    Q 232 70, 226 64
+    L 212 50
+    Q 206 44, 206 54
+    L 206 160
+    Q 206 190, 200 190
+    Q 194 190, 194 160
+    L 194 54
+    Q 194 44, 188 50
+    L 174 64
+    Q 168 70, 168 60
+    L 168 40
+    Z
+  " />
+
+  <!-- 4-pointed star sparkle between prongs -->
+  <path d="
+    M 200 65
+    L 206 82
+    L 216 76
+    L 208 88
+    L 200 110
+    L 192 88
+    L 184 76
+    L 194 82
+    Z
+  " />
+
+  <!-- "Unjess" text -->
+  <text x="200" y="290" text-anchor="middle"
+        font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif"
+        font-size="72" font-weight="400" letter-spacing="-1">
+    Unjess
+  </text>
+
+  <!-- "agentic harness" tagline -->
+  <text x="200" y="330" text-anchor="middle"
+        font-family="'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif"
+        font-size="22" font-weight="300" letter-spacing="4">
+    agentic harness
+  </text>
+</svg>
