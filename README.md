@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo_horizontal_white.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/logo_horizontal.png">
-    <img src="assets/logo_horizontal.png" alt="Unjess" width="400">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo_banner.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo_banner_light.png">
+    <img src="assets/logo_banner.png" alt="Unjess — Agentic Harness" width="500">
   </picture>
 </p>
 
