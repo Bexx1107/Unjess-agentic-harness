@@ -337,10 +337,12 @@ class Agent:
                 {"type": "text", "text": enriched_input},
             ]
             for img in images:
+                raw_d = img.get("data", "")
+                b64_str = base64.b64encode(raw_d).decode("ascii") if isinstance(raw_d, bytes) else str(raw_d)
                 content_parts.append({
                     "type": "image",
-                    "data": base64.b64decode(img["data"]),
-                    "mime_type": img["mime_type"],
+                    "data": b64_str,
+                    "mime_type": img.get("mime_type", "image/png"),
                 })
             self._conversation.append({"role": "user", "content": content_parts})
         else:

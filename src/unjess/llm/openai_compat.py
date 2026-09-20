@@ -1,5 +1,6 @@
 """OpenAI-compatible provider — handles OpenAI API and Ollama (same protocol)."""
 
+import base64
 import json
 import logging
 import random
@@ -56,6 +57,40 @@ def _parse_tool_calls(raw_calls: Any) -> list[ToolCall]:
             arguments=args,
         ))
     return results
+
+
+def _prepare_messages_for_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Format messages and image payloads for OpenAI-compatible APIs.
+
+    Converts internal image dicts to OpenAI's standard image_url format:
+    {"type": "image_url", "image_url": {"url": "data:<mime>;base64,<b64>"}}
+    ensuring that raw bytes never reach json serialization.
+    """
+    prepared: list[dict[str, Any]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            new_content: list[dict[str, Any]] = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image":
+                    raw_data = part.get("data", "")
+                    mime = part.get("mime_type", "image/png")
+                    if isinstance(raw_data, bytes):
+                        b64_str = base64.b64encode(raw_data).decode("ascii")
+                    else:
+                        b64_str = str(raw_data)
+                    new_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime};base64,{b64_str}",
+                        },
+                    })
+                else:
+                    new_content.append(part)
+            prepared.append({**msg, "content": new_content})
+        else:
+            prepared.append(msg)
+    return prepared
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -193,7 +228,7 @@ class OpenAICompatibleProvider(LLMProvider):
     ) -> LLMResponse:
         """Send a chat completion request and return the full response."""
         model = model or self._default_model
-        kwargs: dict[str, Any] = {"model": model, "messages": messages}
+        kwargs: dict[str, Any] = {"model": model, "messages": _prepare_messages_for_openai(messages)}
 
         # Ollama: bust KV cache to prevent old context from leaking
         if self._name in ("ollama", "ollama-api"):
@@ -256,7 +291,7 @@ class OpenAICompatibleProvider(LLMProvider):
         model = model or self._default_model
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": _prepare_messages_for_openai(messages),
             "stream": True,
             "stream_options": {"include_usage": True},
             # Ollama: bust KV cache to prevent context leaking between sessions

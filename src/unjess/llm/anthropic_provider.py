@@ -1,5 +1,6 @@
 """Anthropic / Claude provider — handles the different message format and content blocks."""
 
+import base64
 import json
 import logging
 from typing import Any, Generator
@@ -102,8 +103,31 @@ def _convert_messages_for_anthropic(
                 })
 
         else:
-            # user messages pass through
-            converted.append({"role": role, "content": msg.get("content", "")})
+            # user messages: handle text string or multi-part list with images
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                anthropic_content: list[dict[str, Any]] = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "image":
+                        raw_data = part.get("data", "")
+                        mime = part.get("mime_type", "image/png")
+                        if isinstance(raw_data, bytes):
+                            b64_str = base64.b64encode(raw_data).decode("ascii")
+                        else:
+                            b64_str = str(raw_data)
+                        anthropic_content.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime,
+                                "data": b64_str,
+                            },
+                        })
+                    else:
+                        anthropic_content.append(part)
+                converted.append({"role": role, "content": anthropic_content})
+            else:
+                converted.append({"role": role, "content": content})
 
     return converted
 
