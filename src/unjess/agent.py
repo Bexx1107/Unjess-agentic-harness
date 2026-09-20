@@ -396,11 +396,10 @@ class Agent:
                 self._abort_requested = False
                 break
 
-            # Auto-compact if context is getting full (only at the start of a turn, and if enabled)
+            # Auto-compact if context is getting full (only if enabled)
             self._context_manager.enable_compaction = getattr(self._settings, "enable_compaction", True)
             if (
-                iteration == 1
-                and self._context_manager.enable_compaction
+                self._context_manager.enable_compaction
                 and self._context_manager.needs_compaction(system_prompt, self._conversation)
             ):
                 pre = self._context_manager.get_context_breakdown(
@@ -409,11 +408,15 @@ class Agent:
 
                 # Use LLM to summarize old messages
                 def _summarize(text: str) -> str:
-                    resp = self._router.chat(
-                        messages=[{"role": "user", "content": text}],
-                        tools=None,
-                    )
-                    return resp.text
+                    try:
+                        resp = self._router.chat(
+                            messages=[{"role": "user", "content": text}],
+                            tools=None,
+                        )
+                        return resp.text
+                    except Exception as exc:
+                        logger.warning("Auto-compaction summarization failed: %s", exc)
+                        return ""
 
                 self._conversation = self._context_manager.compact(
                     self._conversation, summarize_fn=_summarize
@@ -924,6 +927,13 @@ class Agent:
         first_text_chunk = True  # Track if we need a separator
 
         for chunk in stream:
+            if self._abort_requested:
+                if is_thinking:
+                    is_thinking = False
+                    self._display.show_thinking_end()
+                self._display.show_info("⏹ Generation stopped by user.")
+                break
+
             # Handle thinking/reasoning content
             if chunk.thinking:
                 if not is_thinking:
@@ -1107,6 +1117,8 @@ class Agent:
     ) -> int:
         """Execute tool calls one at a time."""
         for tc in tool_calls:
+            if self._abort_requested:
+                break
             self._display.show_tool_call(tc.name, tc.arguments)
 
             if self._logger:
@@ -1303,19 +1315,31 @@ class Agent:
 
         def _run_one(tc: ToolCall) -> tuple[str, str, int]:
             start = time.monotonic()
-            result = self._tools.execute(tc.name, tc.arguments)
+            try:
+                result = self._tools.execute(tc.name, tc.arguments)
+            except Exception as exc:
+                result = f"Error: Tool execution failed: {exc}"
             duration_ms = int((time.monotonic() - start) * 1000)
             return tc.id, result, duration_ms
 
         with ThreadPoolExecutor(max_workers=min(len(tool_calls), 8)) as pool:
             futures = {pool.submit(_run_one, tc): tc for tc in tool_calls}
-            for future in as_completed(futures):
-                tc = futures[future]
-                try:
-                    tc_id, result, duration_ms = future.result()
-                    results[tc_id] = (result, duration_ms)
-                except Exception as exc:
-                    results[tc.id] = (f"Error: {exc}", 0)
+            try:
+                for future in as_completed(futures, timeout=35):
+                    if self._abort_requested:
+                        break
+                    tc = futures[future]
+                    try:
+                        tc_id, result, duration_ms = future.result(timeout=25)
+                        results[tc_id] = (result, duration_ms)
+                    except TimeoutError:
+                        results[tc.id] = (f"Error: Tool '{tc.name}' execution timed out after 25s.", 25000)
+                    except Exception as exc:
+                        results[tc.id] = (f"Error: {exc}", 0)
+            except TimeoutError:
+                for future, tc in futures.items():
+                    if tc.id not in results:
+                        results[tc.id] = (f"Error: Parallel tool execution timed out for '{tc.name}'.", 35000)
 
         # Append results in original order (important for conversation coherence)
         for tc in tool_calls:

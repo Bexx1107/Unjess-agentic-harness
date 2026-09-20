@@ -294,8 +294,6 @@ class OpenAICompatibleProvider(LLMProvider):
             "messages": _prepare_messages_for_openai(messages),
             "stream": True,
             "stream_options": {"include_usage": True},
-            # Ollama: bust KV cache to prevent context leaking between sessions
-            **(({"seed": random.randint(0, 2**31)}) if self._name in ("ollama", "ollama-api") else {}),
             # Local providers: low temperature for deterministic tool calling & no rambling
             **(({"temperature": 0.1}) if self._name in ("ollama", "ollama-api", "llamacpp", "lmstudio") else {}),
         }

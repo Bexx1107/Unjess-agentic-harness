@@ -61,9 +61,32 @@ class ToolRegistry:
         """Return JSON schemas for all registered tools (for LLM function calling)."""
         return [tool.to_schema() for tool in self._tools.values()]
 
+    # Common tool name aliases models use (e.g. from Anthropic/AG or shell habits)
+    _TOOL_ALIASES: dict[str, str] = {
+        "view_file": "read_file",
+        "cat": "read_file",
+        "grep": "grep_search",
+        "ripgrep": "grep_search",
+        "rg": "grep_search",
+        "find": "find_by_name",
+        "find_file": "find_by_name",
+        "search_files": "find_by_name",
+        "bash": "run_command",
+        "terminal": "run_command",
+        "cmd": "run_command",
+        "exec": "run_command",
+        "execute_command": "run_command",
+        "web_search": "search_web",
+        "fetch_url": "read_url",
+        "browser_fetch": "read_url",
+    }
+
     def get_tool(self, name: str) -> ToolDefinition | None:
         """Look up a tool by name."""
-        return self._tools.get(name)
+        if name in self._tools:
+            return self._tools[name]
+        canonical = self._TOOL_ALIASES.get(name, name)
+        return self._tools.get(canonical)
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool by name with the given arguments.
@@ -74,6 +97,10 @@ class ToolRegistry:
         Returns the string result, or an error message.
         """
         tool = self._tools.get(name)
+        if tool is None:
+            canonical = self._TOOL_ALIASES.get(name, name)
+            tool = self._tools.get(canonical)
+
         if tool is None:
             return f"Error: Unknown tool '{name}'. Available tools: {', '.join(self._tools.keys())}"
 
@@ -114,6 +141,13 @@ class ToolRegistry:
         "dir": ["path", "dir_path"],
         "folder": ["path", "dir_path"],
         "target": ["path", "file_path", "target_file"],
+        "absolutepath": ["path", "file_path", "target_file"],
+        "targetfile": ["path", "file_path", "target_file", "target"],
+        "startline": ["start_line"],
+        "endline": ["end_line"],
+        "cwd": ["path", "dir_path"],
+        "directorypath": ["path", "dir_path"],
+        "searchdirectory": ["path", "dir_path"],
         # Content-related
         "code": ["content", "new_content", "replacement"],
         "new_code": ["content", "new_content", "replacement"],
@@ -122,6 +156,7 @@ class ToolRegistry:
         "cmd": ["command"],
         "shell_command": ["command"],
         "run": ["command"],
+        "commandline": ["command"],
         # Boolean flags
         "ignore_case": ["case_insensitive"],
         "case_sensitive": ["case_insensitive"],

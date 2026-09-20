@@ -61,10 +61,13 @@ _CONTEXT_WINDOWS: dict[str, int] = {
     "llama3.1": 128_000,
     "deepseek-coder": 16_384,
     # DeepSeek
+    "deepseek-v4.1": 128_000,
+    "deepseek-v4": 128_000,
     "deepseek-v4-flash": 128_000,
     "deepseek-v3": 128_000,
     "deepseek-r1": 128_000,
     "deepseek-chat": 128_000,
+    "deepseek": 64_000,
 }
 
 # Reserve this fraction of context for the model's response
@@ -88,15 +91,12 @@ def count_tokens(text: str, model: str = "") -> int:
         Estimated token count.
     """
     # Try tiktoken for OpenAI models
-    if model.startswith(("gpt-", "o1", "o3", "o4")):
+    if "gpt" in model.lower() or "o1" in model.lower() or "o3" in model.lower() or "o4" in model.lower():
         try:
             import tiktoken
-            try:
-                enc = tiktoken.encoding_for_model(model)
-            except KeyError:
-                enc = tiktoken.get_encoding("cl100k_base")
-            return len(enc.encode(text))
-        except ImportError:
+            encoding = tiktoken.encoding_for_model(model)
+            return len(encoding.encode(text))
+        except Exception:
             pass
 
     # Heuristic fallback: ~4 characters per token
@@ -167,14 +167,21 @@ class ContextManager:
         if self._context_window_override > 0:
             return self._context_window_override
 
+        # Strip common provider prefixes e.g. "ollama:deepseek-v4.1-flash:cloud" -> "deepseek-v4.1-flash:cloud"
+        clean = self._model
+        for prefix in ("ollama:", "ollama-api:", "ollama_api:", "openrouter:", "groq:", "mistral:", "openai:", "google:", "anthropic:"):
+            if clean.lower().startswith(prefix):
+                clean = clean[len(prefix):]
+                break
+
         # Exact match
-        window = _CONTEXT_WINDOWS.get(self._model)
+        window = _CONTEXT_WINDOWS.get(clean) or _CONTEXT_WINDOWS.get(self._model)
         if window:
             return window
 
         # Prefix match
         for key, val in _CONTEXT_WINDOWS.items():
-            if self._model.startswith(key):
+            if clean.startswith(key) or self._model.startswith(key):
                 return val
 
         # Default
@@ -274,6 +281,36 @@ class ContextManager:
                 result.insert(1, notice)
             messages = result
 
+        # Handle tool loop case: single user message at start (latest_user_idx <= 1),
+        # but many assistant+tool turns exceeding context budget
+        elif len(messages) > 4 and count_messages_tokens(messages, self._model) > budget:
+            first = messages[0]
+            split = max(1, len(messages) - 4)
+            while split > 1 and messages[split].get("role") == "tool":
+                split -= 1
+            if split > 1:
+                middle = list(messages[1:split])
+                protected = list(messages[split:])
+                while middle and count_messages_tokens([first] + middle + protected, self._model) > budget:
+                    head = middle[0]
+                    if head.get("role") == "assistant" and head.get("tool_calls"):
+                        call_ids = {tc.get("id") for tc in head["tool_calls"] if tc.get("id")}
+                        middle.pop(0)
+                        while middle and middle[0].get("role") == "tool" and middle[0].get("tool_call_id") in call_ids:
+                            middle.pop(0)
+                    else:
+                        middle.pop(0)
+
+                result = [first] + middle + protected
+                if len(result) < len(messages):
+                    truncated_count = len(messages) - len(result)
+                    notice = {
+                        "role": "user",
+                        "content": f"[{truncated_count} earlier tool execution turns were truncated to fit the context window]",
+                    }
+                    result.insert(1, notice)
+                messages = result
+
         # If still over budget after dropping middle messages (because tool outputs in protected are huge),
         # truncate the content of tool results inside protected messages instead of dropping user prompts.
         if count_messages_tokens(messages, self._model) > budget:
@@ -282,6 +319,18 @@ class ContextManager:
                 if msg.get("role") == "tool" and isinstance(msg.get("content"), str) and len(msg["content"]) > 1000:
                     m = dict(msg)
                     m["content"] = m["content"][:1000] + "\n[...tool result truncated to fit context budget...]"
+                    trimmed.append(m)
+                else:
+                    trimmed.append(msg)
+            messages = trimmed
+
+        # Emergency secondary trim if still over budget: cut tool content down to 300 chars
+        if count_messages_tokens(messages, self._model) > budget:
+            trimmed = []
+            for msg in messages:
+                if msg.get("role") == "tool" and isinstance(msg.get("content"), str) and len(msg["content"]) > 300:
+                    m = dict(msg)
+                    m["content"] = m["content"][:300] + "\n[...tool result truncated...]"
                     trimmed.append(m)
                 else:
                     trimmed.append(msg)
@@ -324,29 +373,27 @@ class ContextManager:
                 break
 
         split = len(messages) - keep_recent
-        if latest_user_idx != -1 and split > latest_user_idx:
+        # If there are multiple user messages in history, don't split past the latest user message
+        if latest_user_idx > 1 and split > latest_user_idx:
             split = latest_user_idx
 
+        # If there are no user messages at all and message list is small (<= 4), keep original
+        if latest_user_idx == -1 and len(messages) <= 4:
+            return messages
+
         # Walk backwards from the initial split to find a safe boundary.
-        while split > 1:
-            msg = messages[split]
-            role = msg.get("role", "")
-
-            if role == "tool":
-                split -= 1
-                continue
-
-            if role == "assistant" and msg.get("tool_calls"):
-                split -= 1
-                continue
-
-            break
+        # If split lands on a 'tool' result, walk back to the assistant that made the tool call.
+        while split > 1 and messages[split].get("role") == "tool":
+            split -= 1
 
         if split <= 1:
             return messages
 
         old_messages = messages[:split]
         recent_messages = messages[split:]
+
+        if len(old_messages) <= 1:
+            return messages
 
         # Build text from old messages
         old_text_parts: list[str] = []
@@ -364,6 +411,8 @@ class ContextManager:
                 summary = summarize_fn(
                     f"Summarize this conversation history in 2-3 concise sentences:\n\n{old_text}"
                 )
+                if not summary or not summary.strip():
+                    summary = old_text[:500] + "..."
             except Exception as exc:
                 logger.warning("LLM summarization failed: %s", exc)
                 summary = old_text[:500] + "..."

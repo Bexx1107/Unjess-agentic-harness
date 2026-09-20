@@ -532,3 +532,66 @@ class TestAntiParalysisGuards:
         assert len(tool_msgs) == 3
         assert "ALREADY inspected 'plan.md'" in tool_msgs[2]["content"]
 
+    def test_parallel_tool_timeout_recovers_gracefully(self) -> None:
+        """When a tool in parallel execution times out or raises, it produces an error result without crashing."""
+        agent = _make_agent()
+        import time
+
+        def slow_or_failing_tool(name, args):
+            if args.get("path") == "slow.txt":
+                raise TimeoutError("Simulated timeout")
+            return "ok content"
+
+        agent._tools.execute = MagicMock(side_effect=slow_or_failing_tool)
+
+        tc1 = ToolCall(id="t1", name="read_file", arguments={"path": "slow.txt"})
+        tc2 = ToolCall(id="t2", name="read_file", arguments={"path": "fast.txt"})
+
+        agent._execute_parallel([tc1, tc2], 0)
+
+        tool_msgs = [m for m in agent.conversation if m.get("role") == "tool"]
+        assert len(tool_msgs) == 2
+        # One tool should report error, the other should have succeeded
+        assert any("Error" in m["content"] for m in tool_msgs)
+        assert any("ok content" in m["content"] for m in tool_msgs)
+
+    def test_multi_turn_auto_compaction_triggers_after_iteration_1(self) -> None:
+        """Auto-compaction evaluates and triggers on turns > 1 when context exceeds threshold."""
+        settings = _make_settings(max_iterations=5)
+        agent = _make_agent(settings=settings)
+        agent._context_manager.enable_compaction = True
+
+        compaction_checks = []
+
+        def mock_needs_compaction(sp, convo):
+            compaction_checks.append(len(convo))
+            # Trigger compaction on turn 2 (when convo has accumulated tool messages)
+            return len(convo) >= 2
+
+        agent._context_manager.needs_compaction = MagicMock(side_effect=mock_needs_compaction)
+        compact_mock = MagicMock(side_effect=lambda convo, summarize_fn: convo[:2])
+        agent._context_manager.compact = compact_mock
+
+        # Turn 1: tool call
+        # Turn 2: tool call (needs_compaction fires here!)
+        # Turn 3: text response (stops)
+        turns = [0]
+        def fake_stream(messages, tools):
+            turns[0] += 1
+            if turns[0] == 1:
+                return LLMResponse(text="", tool_calls=[ToolCall(id="1", name="read_file", arguments={"path": "f1.txt"})], model="test", usage=Usage())
+            elif turns[0] == 2:
+                return LLMResponse(text="", tool_calls=[ToolCall(id="2", name="read_file", arguments={"path": "f2.txt"})], model="test", usage=Usage())
+            return LLMResponse(text="Done", tool_calls=[], model="test", usage=Usage())
+
+        agent._stream_response = MagicMock(side_effect=fake_stream)
+        agent._tools.execute = MagicMock(return_value="content")
+        agent._context_manager.truncate_conversation = MagicMock(side_effect=lambda msgs, sp: msgs)
+
+        agent.run("Run multi turn task")
+
+        # Compaction should have been checked on iterations after 1
+        assert len(compaction_checks) >= 2
+        # And compact() should have been called
+        assert compact_mock.called
+

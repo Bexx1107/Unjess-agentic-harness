@@ -567,3 +567,40 @@ class TestExecuteWithNormalization:
         result = reg.execute("run", {"execute_this": "ls"})
         assert result == "ran"
         handler.assert_called_once_with(command="ls")
+
+
+class TestToolAliases:
+    """Tests for canonical tool name aliases (e.g. view_file -> read_file)."""
+
+    def test_view_file_alias_resolves_to_read_file(self) -> None:
+        handler = MagicMock(return_value="file contents")
+        reg = ToolRegistry()
+        reg.register("read_file", "Read file", _make_file_schema(), handler)
+
+        assert reg.get_tool("view_file") is not None
+        assert reg.get_tool("view_file").name == "read_file"
+
+        res = reg.execute("view_file", {"path": "test.txt", "content": "hello"})
+        assert res == "file contents"
+        handler.assert_called_once_with(path="test.txt", content="hello")
+
+    def test_grep_alias_resolves_to_grep_search(self) -> None:
+        handler = MagicMock(return_value="matches")
+        reg = ToolRegistry()
+        reg.register("grep_search", "Search", _make_search_schema(), handler)
+
+        assert reg.get_tool("grep") is not None
+        res = reg.execute("grep", {"query": "pattern", "path": "."})
+        assert res == "matches"
+        handler.assert_called_once_with(query="pattern", path=".")
+
+    def test_bash_and_terminal_aliases_resolve_to_run_command(self) -> None:
+        handler = MagicMock(return_value="ok")
+        reg = ToolRegistry()
+        reg.register("run_command", "Run", _make_run_schema(), handler)
+
+        assert reg.get_tool("bash") is not None
+        assert reg.get_tool("terminal") is not None
+        res = reg.execute("bash", {"command": "echo 1"})
+        assert res == "ok"
+        handler.assert_called_once_with(command="echo 1")

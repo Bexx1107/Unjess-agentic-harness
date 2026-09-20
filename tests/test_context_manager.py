@@ -299,6 +299,28 @@ class TestTruncateConversation:
                     for r in result[:i]
                 )
 
+    def test_truncate_tool_loop_single_user_prompt(self) -> None:
+        """Verify truncation works in a multi-turn tool execution loop with only 1 user prompt."""
+        cm = ContextManager(model="gemma")  # 8192 context window
+        tc = [{"id": "tc_1", "function": {"name": "read_file", "arguments": "{}"}}]
+        # Single initial user prompt, followed by 10 turns of assistant tool calls and massive results
+        msgs: list[dict[str, Any]] = [_msg("user", "build the entire feature")]
+        for i in range(10):
+            msgs.append(_msg("assistant", f"Turn {i}", tool_calls=tc))
+            msgs.append(_msg("tool", "x" * 4000, tool_call_id="tc_1"))
+
+        result = cm.truncate_conversation(msgs, "system prompt")
+        assert len(result) < len(msgs)
+        # The user's initial instructions are preserved
+        assert result[0]["content"] == "build the entire feature"
+        # Tool call groups remain paired
+        for i, m in enumerate(result):
+            if m.get("role") == "tool":
+                assert any(
+                    r.get("role") == "assistant" and r.get("tool_calls")
+                    for r in result[:i]
+                )
+
 
 # ===========================================================================
 # ContextManager — compact
@@ -390,6 +412,22 @@ class TestCompact:
         result = cm.compact(msgs, keep_recent=2)
         # split walks back to <= 1, returns original
         assert result is msgs
+
+    def test_compact_tool_loop_single_user_prompt(self) -> None:
+        """Verify compaction succeeds when a long conversation starts with only 1 user prompt."""
+        cm = ContextManager(model="gemini-3.1-flash")
+        tc = [{"id": "tc_1", "function": {"name": "read_file", "arguments": "{}"}}]
+        msgs: list[dict[str, Any]] = [_msg("user", "investigate codebase and fix bugs")]
+        for i in range(8):
+            msgs.append(_msg("assistant", f"Turn {i}", tool_calls=tc))
+            msgs.append(_msg("tool", f"Result {i}", tool_call_id="tc_1"))
+
+        result = cm.compact(msgs, keep_recent=4)
+        assert len(result) < len(msgs)
+        # Summary message is present
+        assert any("[Conversation summary" in m.get("content", "") for m in result)
+        # Most recent turn is preserved
+        assert result[-1]["content"] == "Result 7"
 
 
 # ===========================================================================
