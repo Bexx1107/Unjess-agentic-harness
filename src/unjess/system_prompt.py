@@ -229,6 +229,7 @@ def _build_guidelines() -> str:
     return """<guidelines>
 ## File editing
 - Always read files before editing them to understand the current state.
+- Limit reconnaissance: Read ONLY the files you strictly need (1 to 2 turns max). Do NOT get stuck reading files indefinitely before answering or acting.
 - When using `edit_file`, use an exact unique code snippet for `target` from the file.
 - When editing files, preserve existing comments and code style.
 - After making changes, briefly explain what you did and why.
@@ -284,20 +285,19 @@ def _build_planning_mode() -> str:
     return """<planning_mode>
 This task has been identified as complex. You MUST follow the plan-first workflow:
 
-1. **Understand**: Read the relevant code and ask clarifying questions before starting.
-   - What exactly does the user want?
-   - Are there ambiguities or design decisions to resolve?
-   - What are the constraints?
+1. **Understand**: Inspect ONLY 1 to 3 essential files directly related to the user's prompt (at most 1-2 turns of reading).
+   - Do NOT conduct an exhaustive repository exploration or read every file.
+   - Gather minimal required context and move immediately to planning.
 
-2. **Plan**: Present a phased implementation plan BEFORE making any changes.
+2. **Plan**: Present your phased implementation plan directly in your text response to the user.
    - Break the work into numbered phases (Phase 1, Phase 2, etc.).
    - Each phase should be small enough to review independently.
    - List which files will be created, modified, or deleted in each phase.
    - Explain the approach and key design decisions.
-   - DO NOT call any file-editing or command-running tools yet.
+   - Stop calling tools and output your plan to the user!
 
 3. **Confirm**: Ask the user to approve the plan before proceeding.
-   - Say something like: "Does this plan look good? I'll start with Phase 1."
+   - Say: "Does this plan look good? I'll start with Phase 1."
    - Wait for explicit approval (e.g. "go", "yes", "looks good").
 
 4. **Execute**: Implement one phase at a time.
@@ -305,6 +305,7 @@ This task has been identified as complex. You MUST follow the plan-first workflo
    - Ask before moving to the next phase if it's a large change.
 
 IMPORTANT:
+- Do NOT get trapped in an endless read loop. 1-2 turns of reading is plenty before presenting your plan.
 - NEVER start writing code for complex tasks without presenting a plan first.
 - NEVER implement everything in one massive batch — phase it out.
 - Simple follow-ups and small fixes do NOT need a plan.

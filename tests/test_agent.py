@@ -6,7 +6,10 @@ from typing import Any
 from unittest.mock import MagicMock, patch, PropertyMock
 from collections import deque
 
-from unjess.agent import Agent, _MAX_TOOL_RETRIES, _STUCK_WINDOW, _PARALLEL_SAFE_TOOLS
+from unjess.agent import (
+    Agent, _MAX_TOOL_RETRIES, _STUCK_WINDOW, _PARALLEL_SAFE_TOOLS,
+    _READ_ONLY_TOOLS, _CONSECUTIVE_READ_NUDGE, _CONSECUTIVE_READ_HARD_LIMIT,
+)
 from unjess.config import Settings
 from unjess.llm.base import LLMResponse, ToolCall, Usage
 from unjess.tools import ToolRegistry
@@ -423,3 +426,109 @@ class TestCostEnforcement:
         # Should have mentioned cost in the warning
         warning_text = agent._display.show_warning.call_args[0][0]
         assert "cost" in warning_text.lower() or "limit" in warning_text.lower()
+
+
+# ===================================================================
+# Anti-Paralysis Guards
+# ===================================================================
+
+class TestAntiParalysisGuards:
+    """Tests for consecutive read limits and anti-paralysis guards."""
+
+    def test_consecutive_read_nudge_injected(self) -> None:
+        """When an agent executes pure read calls for N consecutive turns, a nudge is injected."""
+        settings = _make_settings(max_iterations=10)
+        agent = _make_agent(settings=settings)
+
+        # Mock tools so read_file returns content
+        agent._tools.execute = MagicMock(return_value="file contents line 1\nline 2")
+
+        # Create responses: 3 consecutive turns of read_file, then a stop
+        read_tc = ToolCall(id="c1", name="read_file", arguments={"path": "foo.py"})
+        turn_count = [0]
+
+        def fake_stream(messages, tools):
+            turn_count[0] += 1
+            if turn_count[0] <= 3:
+                return LLMResponse(
+                    text="",
+                    tool_calls=[ToolCall(id=f"c{turn_count[0]}", name="read_file", arguments={"path": f"foo{turn_count[0]}.py"})],
+                    model="test-model",
+                    usage=Usage(prompt_tokens=5, completion_tokens=5),
+                )
+            # 4th turn: returns final text
+            return LLMResponse(
+                text="Here is the answer based on foo files.",
+                tool_calls=[],
+                model="test-model",
+                usage=Usage(prompt_tokens=5, completion_tokens=5),
+            )
+
+        agent._stream_response = MagicMock(side_effect=fake_stream)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(side_effect=lambda msgs, sp: msgs)
+
+        agent.run("Inspect the codebase")
+
+        # Turn 3 tool result should contain the nudge directive
+        tool_msgs = [m for m in agent.conversation if m.get("role") == "tool"]
+        assert len(tool_msgs) >= 3
+        last_nudge_msg = tool_msgs[2]["content"]
+        assert "SYSTEM DIRECTIVE" in last_nudge_msg
+        assert "STOP calling read tools" in last_nudge_msg
+
+    def test_consecutive_read_hard_limit_forces_synthesis(self) -> None:
+        """When consecutive read turns reach hard limit, loop halts and forces synthesis without tools."""
+        settings = _make_settings(max_iterations=20)
+        agent = _make_agent(settings=settings)
+        agent._tools.execute = MagicMock(return_value="sample content")
+
+        tools_passed_to_stream = []
+
+        def fake_stream(messages, tools):
+            tools_passed_to_stream.append(tools)
+            # Keep returning read_file tool calls
+            return LLMResponse(
+                text="",
+                tool_calls=[ToolCall(id=f"call_{len(tools_passed_to_stream)}", name="read_file", arguments={"path": f"f_{len(tools_passed_to_stream)}.py"})],
+                model="test-model",
+                usage=Usage(prompt_tokens=5, completion_tokens=5),
+            )
+
+        agent._stream_response = MagicMock(side_effect=fake_stream)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(side_effect=lambda msgs, sp: msgs)
+
+        agent.run("Read everything")
+
+        # Display should show warning about analysis paralysis
+        agent._display.show_warning.assert_called()
+        warning_text = agent._display.show_warning.call_args[0][0]
+        assert "paralysis" in warning_text.lower() or "read turns" in warning_text.lower()
+
+        # The final call to _stream_response must have tools=None (forcing synthesis text)
+        assert tools_passed_to_stream[-1] is None
+
+    def test_repeated_file_path_read_loop_guard(self) -> None:
+        """Reading the same file path 3+ times with varied arguments is caught and stopped."""
+        agent = _make_agent()
+        agent._tools.execute = MagicMock(return_value="file content")
+
+        # Simulate 3 reads of the same file path with different line numbers
+        tc1 = ToolCall(id="1", name="read_file", arguments={"path": "plan.md", "start_line": 1, "end_line": 50})
+        tc2 = ToolCall(id="2", name="read_file", arguments={"path": "plan.md", "start_line": 51, "end_line": 100})
+        tc3 = ToolCall(id="3", name="read_file", arguments={"path": "plan.md", "start_line": 101, "end_line": 150})
+
+        resp1 = LLMResponse(text="", tool_calls=[tc1], model="test", usage=Usage())
+        resp2 = LLMResponse(text="", tool_calls=[tc2], model="test", usage=Usage())
+        resp3 = LLMResponse(text="", tool_calls=[tc3], model="test", usage=Usage())
+
+        agent._handle_tool_calls(resp1, 0)
+        agent._handle_tool_calls(resp2, 0)
+        agent._handle_tool_calls(resp3, 0)
+
+        tool_msgs = [m for m in agent.conversation if m.get("role") == "tool"]
+        # The 3rd tool call should have returned the redundant inspection notice
+        assert len(tool_msgs) == 3
+        assert "ALREADY inspected 'plan.md'" in tool_msgs[2]["content"]
+

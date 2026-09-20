@@ -38,12 +38,22 @@ _MAX_TOOL_RETRIES = 3
 _STUCK_WINDOW = 5  # check last N tool calls for repetition
 _GOAL_MAX_ITERATIONS = 200  # extended limit for /goal mode
 _MAX_TOOL_RESULT_CHARS = 4000  # truncate tool results stored in conversation
+_CONSECUTIVE_READ_NUDGE = 3  # turns of pure reading before injecting a stop-reading notice
+_CONSECUTIVE_READ_HARD_LIMIT = 5  # turns of pure reading before halting and forcing synthesis
 
 # Tools safe to execute in parallel (read-only)
 _PARALLEL_SAFE_TOOLS = frozenset({
-    "read_file", "list_dir", "grep_search",
+    "read_file", "view_file", "list_dir", "grep_search", "find_by_name",
     "search_web", "read_url",
     "browser_get_text", "browser_screenshot",
+})
+
+# All read-only reconnaissance tools
+_READ_ONLY_TOOLS = frozenset({
+    "read_file", "view_file", "list_dir", "grep_search", "find_by_name",
+    "search_web", "read_url",
+    "browser_get_text", "browser_screenshot",
+    "list_agents", "read_agent_messages",
 })
 
 
@@ -373,6 +383,7 @@ class Agent:
         system_prompt = self._build_full_system_prompt()
         iteration = 0
         consecutive_errors = 0
+        consecutive_read_turns = 0
 
         max_iter = _GOAL_MAX_ITERATIONS if self._goal_mode else self._max_iterations
 
@@ -591,13 +602,51 @@ class Agent:
 
             # Handle tool calls
             if response.tool_calls:
+                # Track consecutive read-only turns to prevent analysis paralysis
+                is_pure_read = all(tc.name in _READ_ONLY_TOOLS for tc in response.tool_calls)
+                if is_pure_read:
+                    consecutive_read_turns += 1
+                else:
+                    consecutive_read_turns = 0
+
                 consecutive_errors = self._handle_tool_calls(
-                    response, consecutive_errors
+                    response, consecutive_errors, consecutive_read_turns=consecutive_read_turns
                 )
                 if consecutive_errors >= _MAX_TOOL_RETRIES:
                     self._display.show_error(
                         f"Too many consecutive tool errors ({_MAX_TOOL_RETRIES}). Stopping."
                     )
+                    break
+
+                # Hard limit for consecutive read reconnaissance turns
+                hard_read_limit = (
+                    _CONSECUTIVE_READ_HARD_LIMIT * 2
+                    if self._goal_mode
+                    else _CONSECUTIVE_READ_HARD_LIMIT
+                )
+                if is_pure_read and consecutive_read_turns >= hard_read_limit:
+                    self._display.show_warning(
+                        f"Analysis paralysis detected ({consecutive_read_turns} consecutive read turns). Forcing final synthesis."
+                    )
+                    self._conversation.append({
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM DIRECTIVE: Maximum exploration budget reached. "
+                            "Do NOT call any more tools. Synthesize the findings from the files you inspected "
+                            "and output your implementation plan or answer now.]"
+                        ),
+                    })
+                    final_messages = [{"role": "system", "content": system_prompt}] + self._conversation
+                    try:
+                        final_response = self._stream_response(final_messages, tools=None)
+                        if self._settings.show_stats and final_response.usage:
+                            self._display.show_stats(
+                                final_response.usage.prompt_tokens,
+                                final_response.usage.completion_tokens,
+                                model=final_response.model,
+                            )
+                    except Exception as exc:
+                        logger.debug("Failed to get forced final response: %s", exc)
                     break
 
                 # Stuck detection
@@ -1002,6 +1051,7 @@ class Agent:
         self,
         response: LLMResponse,
         consecutive_errors: int,
+        consecutive_read_turns: int = 0,
     ) -> int:
         """Execute tool calls and append results to conversation.
 
@@ -1010,6 +1060,20 @@ class Agent:
 
         Returns the updated consecutive_errors count.
         """
+        # Determine if we should append a nudge notice to the final tool result
+        nudge_limit = (
+            _CONSECUTIVE_READ_NUDGE * 2
+            if self._goal_mode
+            else _CONSECUTIVE_READ_NUDGE
+        )
+        nudge_notice = ""
+        if consecutive_read_turns >= nudge_limit:
+            nudge_notice = (
+                f"\n\n[SYSTEM DIRECTIVE: You have completed {consecutive_read_turns} consecutive rounds of file reading. "
+                "You now have sufficient context. STOP calling read tools. Either: 1) present your implementation plan / response "
+                "to the user, or 2) begin making the necessary code edits.]"
+            )
+
         # Partition into parallel-safe reads and sequential writes
         read_calls = [tc for tc in response.tool_calls if tc.name in _PARALLEL_SAFE_TOOLS]
         write_calls = [tc for tc in response.tool_calls if tc.name not in _PARALLEL_SAFE_TOOLS]
@@ -1017,17 +1081,20 @@ class Agent:
         # Execute read calls in parallel
         if len(read_calls) > 1:
             consecutive_errors = self._execute_parallel(
-                read_calls, consecutive_errors
+                read_calls, consecutive_errors,
+                nudge_notice=nudge_notice if not write_calls else "",
             )
         elif read_calls:
             consecutive_errors = self._execute_sequential(
-                read_calls, consecutive_errors
+                read_calls, consecutive_errors,
+                nudge_notice=nudge_notice if not write_calls else "",
             )
 
         # Execute write calls sequentially
         if write_calls:
             consecutive_errors = self._execute_sequential(
-                write_calls, consecutive_errors
+                write_calls, consecutive_errors,
+                nudge_notice=nudge_notice,
             )
 
         return consecutive_errors
@@ -1036,6 +1103,7 @@ class Agent:
         self,
         tool_calls: list[ToolCall],
         consecutive_errors: int,
+        nudge_notice: str = "",
     ) -> int:
         """Execute tool calls one at a time."""
         for tc in tool_calls:
@@ -1046,24 +1114,39 @@ class Agent:
 
             # Track for stuck detection
             call_sig = f"{tc.name}({json.dumps(tc.arguments, sort_keys=True)})"
+            recent_calls = list(self._recent_tool_calls)
 
-            # Duplicate read guard: block redundant re-reads of files/directories if repeated 2+ times in same turn
-            if tc.name in ("read_file", "view_file", "list_dir", "grep_search"):
-                recent_calls = list(self._recent_tool_calls)
-                if recent_calls.count(call_sig) >= 2:
-                    self._recent_tool_calls.append(call_sig)
-                    self._display.show_info(f"Notice: Redundant re-read skipped for {tc.name}")
-                    notice_result = (
-                        f"Notice: You have ALREADY executed '{tc.name}' with these arguments in the recent context. "
-                        "Do NOT re-read the same file repeatedly. Proceed directly to making necessary code edits or providing your final response."
-                    )
-                    self._conversation.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "name": tc.name,
-                        "content": notice_result,
-                    })
-                    continue
+            # Target path check
+            target_p = tc.arguments.get("path", tc.arguments.get("file_path", tc.arguments.get("AbsolutePath", "")))
+            norm_target = str(target_p).replace("\\", "/").strip().lower() if target_p else ""
+
+            # Duplicate read guard:
+            # 1. Exact duplicate call signature (2+ times)
+            # 2. Same file read across multiple different slices/line ranges (3+ times)
+            is_exact_dup = recent_calls.count(call_sig) >= 2
+            is_path_loop = False
+            if norm_target and tc.name in ("read_file", "view_file"):
+                path_read_count = sum(
+                    1 for sig in recent_calls
+                    if ("read_file" in sig or "view_file" in sig) and norm_target in sig.lower()
+                )
+                if path_read_count >= 2:
+                    is_path_loop = True
+
+            if tc.name in ("read_file", "view_file", "list_dir", "grep_search") and (is_exact_dup or is_path_loop):
+                self._recent_tool_calls.append(call_sig)
+                self._display.show_info(f"Notice: Redundant re-read skipped for {tc.name} ({target_p or 'same args'})")
+                notice_result = (
+                    f"Notice: You have ALREADY inspected '{target_p or tc.name}' multiple times in the recent context. "
+                    "Do NOT re-read the same file repeatedly. Proceed directly to making necessary code edits or providing your final response."
+                )
+                self._conversation.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "name": tc.name,
+                    "content": notice_result,
+                })
+                continue
 
             self._recent_tool_calls.append(call_sig)
 
@@ -1125,11 +1208,15 @@ class Agent:
             if self._logger:
                 self._logger.log_tool_result(tc.name, result, duration_ms=duration_ms)
 
+            final_content = planning_warning + self._truncate_tool_result(tc.name, result)
+            if tc == tool_calls[-1] and nudge_notice:
+                final_content += nudge_notice
+
             self._conversation.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "name": tc.name,
-                "content": planning_warning + self._truncate_tool_result(tc.name, result),
+                "content": final_content,
             })
 
             # Track in knowledge graph
@@ -1164,22 +1251,36 @@ class Agent:
         self,
         tool_calls: list[ToolCall],
         consecutive_errors: int,
+        nudge_notice: str = "",
     ) -> int:
         """Execute read-only tool calls in parallel."""
         # Filter out redundant re-reads in parallel execution
         valid_calls: list[ToolCall] = []
+        recent_calls = list(self._recent_tool_calls)
         for tc in tool_calls:
             self._display.show_tool_call(tc.name, tc.arguments)
             if self._logger:
                 self._logger.log_tool_call(tc.name, tc.arguments)
             call_sig = f"{tc.name}({json.dumps(tc.arguments, sort_keys=True)})"
 
-            recent_calls = list(self._recent_tool_calls)
-            if tc.name in ("read_file", "view_file", "list_dir", "grep_search") and recent_calls.count(call_sig) >= 2:
+            target_p = tc.arguments.get("path", tc.arguments.get("file_path", tc.arguments.get("AbsolutePath", "")))
+            norm_target = str(target_p).replace("\\", "/").strip().lower() if target_p else ""
+
+            is_exact_dup = recent_calls.count(call_sig) >= 2
+            is_path_loop = False
+            if norm_target and tc.name in ("read_file", "view_file"):
+                path_read_count = sum(
+                    1 for sig in recent_calls
+                    if ("read_file" in sig or "view_file" in sig) and norm_target in sig.lower()
+                )
+                if path_read_count >= 2:
+                    is_path_loop = True
+
+            if tc.name in ("read_file", "view_file", "list_dir", "grep_search") and (is_exact_dup or is_path_loop):
                 self._recent_tool_calls.append(call_sig)
-                self._display.show_info(f"Notice: Redundant parallel re-read skipped for {tc.name}")
+                self._display.show_info(f"Notice: Redundant parallel re-read skipped for {tc.name} ({target_p or 'same args'})")
                 notice_result = (
-                    f"Notice: You have ALREADY executed '{tc.name}' with these arguments in the recent context. "
+                    f"Notice: You have ALREADY inspected '{target_p or tc.name}' multiple times in the recent context. "
                     "Do NOT re-read the same file repeatedly. Proceed directly to making necessary code edits or providing your final response."
                 )
                 self._conversation.append({
@@ -1230,11 +1331,15 @@ class Agent:
             if self._logger:
                 self._logger.log_tool_result(tc.name, result, duration_ms=duration_ms)
 
+            content_str = self._truncate_tool_result(tc.name, result)
+            if tc == tool_calls[-1] and nudge_notice:
+                content_str += nudge_notice
+
             self._conversation.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "name": tc.name,
-                "content": self._truncate_tool_result(tc.name, result),
+                "content": content_str,
             })
 
             # Register notable files as sidebar artifacts
