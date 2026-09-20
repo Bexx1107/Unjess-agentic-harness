@@ -443,20 +443,19 @@ class TestAntiParalysisGuards:
         # Mock tools so read_file returns content
         agent._tools.execute = MagicMock(return_value="file contents line 1\nline 2")
 
-        # Create responses: 3 consecutive turns of read_file, then a stop
-        read_tc = ToolCall(id="c1", name="read_file", arguments={"path": "foo.py"})
+        # Create responses: 5 consecutive turns of read_file, then a stop
         turn_count = [0]
 
         def fake_stream(messages, tools):
             turn_count[0] += 1
-            if turn_count[0] <= 3:
+            if turn_count[0] <= 5:
                 return LLMResponse(
                     text="",
                     tool_calls=[ToolCall(id=f"c{turn_count[0]}", name="read_file", arguments={"path": f"foo{turn_count[0]}.py"})],
                     model="test-model",
                     usage=Usage(prompt_tokens=5, completion_tokens=5),
                 )
-            # 4th turn: returns final text
+            # 6th turn: returns final text
             return LLMResponse(
                 text="Here is the answer based on foo files.",
                 tool_calls=[],
@@ -470,12 +469,12 @@ class TestAntiParalysisGuards:
 
         agent.run("Inspect the codebase")
 
-        # Turn 3 tool result should contain the nudge directive
+        # Turn 5 tool result should contain the nudge directive
         tool_msgs = [m for m in agent.conversation if m.get("role") == "tool"]
-        assert len(tool_msgs) >= 3
-        last_nudge_msg = tool_msgs[2]["content"]
-        assert "SYSTEM DIRECTIVE" in last_nudge_msg
-        assert "STOP calling read tools" in last_nudge_msg
+        assert len(tool_msgs) >= 5
+        last_nudge_msg = tool_msgs[4]["content"]
+        assert "SYSTEM NOTICE" in last_nudge_msg
+        assert "consecutive rounds of file reading" in last_nudge_msg
 
     def test_consecutive_read_hard_limit_forces_synthesis(self) -> None:
         """When consecutive read turns reach hard limit, loop halts and forces synthesis without tools."""
@@ -510,27 +509,28 @@ class TestAntiParalysisGuards:
         assert tools_passed_to_stream[-1] is None
 
     def test_repeated_file_path_read_loop_guard(self) -> None:
-        """Reading the same file path 3+ times with varied arguments is caught and stopped."""
+        """Reading multiple different slices of a file is permitted up to threshold (6), then blocked."""
         agent = _make_agent()
         agent._tools.execute = MagicMock(return_value="file content")
 
-        # Simulate 3 reads of the same file path with different line numbers
-        tc1 = ToolCall(id="1", name="read_file", arguments={"path": "plan.md", "start_line": 1, "end_line": 50})
-        tc2 = ToolCall(id="2", name="read_file", arguments={"path": "plan.md", "start_line": 51, "end_line": 100})
-        tc3 = ToolCall(id="3", name="read_file", arguments={"path": "plan.md", "start_line": 101, "end_line": 150})
+        # Simulate reads of the same file path with different line numbers
+        tcs = [
+            ToolCall(id=str(i), name="read_file", arguments={"path": "plan.md", "start_line": i * 50, "end_line": (i + 1) * 50})
+            for i in range(7)
+        ]
 
-        resp1 = LLMResponse(text="", tool_calls=[tc1], model="test", usage=Usage())
-        resp2 = LLMResponse(text="", tool_calls=[tc2], model="test", usage=Usage())
-        resp3 = LLMResponse(text="", tool_calls=[tc3], model="test", usage=Usage())
-
-        agent._handle_tool_calls(resp1, 0)
-        agent._handle_tool_calls(resp2, 0)
-        agent._handle_tool_calls(resp3, 0)
+        for tc in tcs:
+            resp = LLMResponse(text="", tool_calls=[tc], model="test", usage=Usage())
+            agent._handle_tool_calls(resp, 0)
 
         tool_msgs = [m for m in agent.conversation if m.get("role") == "tool"]
-        # The 3rd tool call should have returned the redundant inspection notice
-        assert len(tool_msgs) == 3
-        assert "ALREADY inspected 'plan.md'" in tool_msgs[2]["content"]
+        assert len(tool_msgs) == 7
+        # Early slices should have executed normally without false-positive blocking
+        assert "file content" in tool_msgs[0]["content"]
+        assert "file content" in tool_msgs[1]["content"]
+        assert "file content" in tool_msgs[2]["content"]
+        # The 7th tool call exceeds the 6-read threshold and should return the notice
+        assert "already read" in tool_msgs[-1]["content"].lower() or "notice" in tool_msgs[-1]["content"].lower()
 
     def test_parallel_tool_timeout_recovers_gracefully(self) -> None:
         """When a tool in parallel execution times out or raises, it produces an error result without crashing."""

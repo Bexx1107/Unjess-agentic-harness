@@ -38,8 +38,8 @@ _MAX_TOOL_RETRIES = 3
 _STUCK_WINDOW = 5  # check last N tool calls for repetition
 _GOAL_MAX_ITERATIONS = 200  # extended limit for /goal mode
 _MAX_TOOL_RESULT_CHARS = 4000  # truncate tool results stored in conversation
-_CONSECUTIVE_READ_NUDGE = 3  # turns of pure reading before injecting a stop-reading notice
-_CONSECUTIVE_READ_HARD_LIMIT = 5  # turns of pure reading before halting and forcing synthesis
+_CONSECUTIVE_READ_NUDGE = 5  # turns of pure reading before injecting a gentle nudge
+_CONSECUTIVE_READ_HARD_LIMIT = 8  # turns of pure reading before halting and forcing synthesis
 
 # Tools safe to execute in parallel (read-only)
 _PARALLEL_SAFE_TOOLS = frozenset({
@@ -1079,9 +1079,8 @@ class Agent:
         nudge_notice = ""
         if consecutive_read_turns >= nudge_limit:
             nudge_notice = (
-                f"\n\n[SYSTEM DIRECTIVE: You have completed {consecutive_read_turns} consecutive rounds of file reading. "
-                "You now have sufficient context. STOP calling read tools. Either: 1) present your implementation plan / response "
-                "to the user, or 2) begin making the necessary code edits.]"
+                f"\n\n[SYSTEM NOTICE: You have completed {consecutive_read_turns} consecutive rounds of file reading. "
+                "If you have gathered sufficient context, proceed to making your code edits or providing your implementation plan.]"
             )
 
         # Partition into parallel-safe reads and sequential writes
@@ -1133,8 +1132,9 @@ class Agent:
             norm_target = str(target_p).replace("\\", "/").strip().lower() if target_p else ""
 
             # Duplicate read guard:
-            # 1. Exact duplicate call signature (2+ times)
-            # 2. Same file read across multiple different slices/line ranges (3+ times)
+            # Duplicate read guard:
+            # 1. Exact duplicate call signature (2+ times with identical arguments)
+            # 2. Excessive reads of the same file path without edits (6+ times)
             is_exact_dup = recent_calls.count(call_sig) >= 2
             is_path_loop = False
             if norm_target and tc.name in ("read_file", "view_file"):
@@ -1142,15 +1142,15 @@ class Agent:
                     1 for sig in recent_calls
                     if ("read_file" in sig or "view_file" in sig) and norm_target in sig.lower()
                 )
-                if path_read_count >= 2:
+                if path_read_count >= 6:
                     is_path_loop = True
 
             if tc.name in ("read_file", "view_file", "list_dir", "grep_search") and (is_exact_dup or is_path_loop):
                 self._recent_tool_calls.append(call_sig)
                 self._display.show_info(f"Notice: Redundant re-read skipped for {tc.name} ({target_p or 'same args'})")
                 notice_result = (
-                    f"Notice: You have ALREADY inspected '{target_p or tc.name}' multiple times in the recent context. "
-                    "Do NOT re-read the same file repeatedly. Proceed directly to making necessary code edits or providing your final response."
+                    f"[Notice: Content for '{target_p or tc.name}' was already read in recent context above. "
+                    "Proceed directly with code edits or final response.]"
                 )
                 self._conversation.append({
                     "role": "tool",
@@ -1285,15 +1285,15 @@ class Agent:
                     1 for sig in recent_calls
                     if ("read_file" in sig or "view_file" in sig) and norm_target in sig.lower()
                 )
-                if path_read_count >= 2:
+                if path_read_count >= 6:
                     is_path_loop = True
 
             if tc.name in ("read_file", "view_file", "list_dir", "grep_search") and (is_exact_dup or is_path_loop):
                 self._recent_tool_calls.append(call_sig)
                 self._display.show_info(f"Notice: Redundant parallel re-read skipped for {tc.name} ({target_p or 'same args'})")
                 notice_result = (
-                    f"Notice: You have ALREADY inspected '{target_p or tc.name}' multiple times in the recent context. "
-                    "Do NOT re-read the same file repeatedly. Proceed directly to making necessary code edits or providing your final response."
+                    f"[Notice: Content for '{target_p or tc.name}' was already read in recent context above. "
+                    "Proceed directly with code edits or final response.]"
                 )
                 self._conversation.append({
                     "role": "tool",
