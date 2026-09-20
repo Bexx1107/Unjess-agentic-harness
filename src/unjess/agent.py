@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 _MAX_TOOL_RETRIES = 3
 _STUCK_WINDOW = 5  # check last N tool calls for repetition
 _GOAL_MAX_ITERATIONS = 200  # extended limit for /goal mode
-_MAX_TOOL_RESULT_CHARS = 4000  # truncate tool results stored in conversation
+_MAX_TOOL_RESULT_CHARS = 48000  # truncate tool results stored in conversation (~1,200 lines)
 _CONSECUTIVE_READ_NUDGE = 5  # turns of pure reading before injecting a gentle nudge
 _CONSECUTIVE_READ_HARD_LIMIT = 8  # turns of pure reading before halting and forcing synthesis
 
@@ -1322,24 +1322,27 @@ class Agent:
             duration_ms = int((time.monotonic() - start) * 1000)
             return tc.id, result, duration_ms
 
-        with ThreadPoolExecutor(max_workers=min(len(tool_calls), 8)) as pool:
+        pool = ThreadPoolExecutor(max_workers=min(len(tool_calls), 8))
+        try:
             futures = {pool.submit(_run_one, tc): tc for tc in tool_calls}
             try:
-                for future in as_completed(futures, timeout=35):
+                for future in as_completed(futures, timeout=25):
                     if self._abort_requested:
                         break
                     tc = futures[future]
                     try:
-                        tc_id, result, duration_ms = future.result(timeout=25)
+                        tc_id, result, duration_ms = future.result(timeout=20)
                         results[tc_id] = (result, duration_ms)
                     except TimeoutError:
-                        results[tc.id] = (f"Error: Tool '{tc.name}' execution timed out after 25s.", 25000)
+                        results[tc.id] = (f"Error: Tool '{tc.name}' execution timed out after 20s.", 20000)
                     except Exception as exc:
                         results[tc.id] = (f"Error: {exc}", 0)
             except TimeoutError:
                 for future, tc in futures.items():
                     if tc.id not in results:
-                        results[tc.id] = (f"Error: Parallel tool execution timed out for '{tc.name}'.", 35000)
+                        results[tc.id] = (f"Error: Parallel tool execution timed out for '{tc.name}'.", 25000)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         # Append results in original order (important for conversation coherence)
         for tc in tool_calls:

@@ -215,8 +215,8 @@ def _read_file(
     if s >= total:
         return f"Error: start_line {start_line} exceeds file length ({total} lines)"
 
-    # Cap at 500 lines
-    max_lines = 500
+    # Cap at 1000 lines
+    max_lines = 1000
     if (e - s) > max_lines:
         e = s + max_lines
 
