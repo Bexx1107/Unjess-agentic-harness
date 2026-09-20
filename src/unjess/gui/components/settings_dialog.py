@@ -296,7 +296,7 @@ def create_settings_dialog(
 
                     ollama_api_input = ui.input(
                         label="Ollama API Base URL (Cloud)",
-                        value=getattr(settings, "ollama_api_base_url", "https://api.ollama.com"),
+                        value=getattr(settings, "ollama_api_base_url", "https://ollama.com"),
                     ).props("outlined dense dark").classes("w-full mb-2")
 
                     lmstudio_input = ui.input(
@@ -1305,9 +1305,10 @@ def create_settings_dialog(
                     settings.ollama_base_url = (
                         ollama_input.value or "http://localhost:11434"
                     )
-                    settings.ollama_api_base_url = (
-                        ollama_api_input.value or "https://api.ollama.com"
-                    )
+                    _raw_ollama_api = (ollama_api_input.value or "https://ollama.com").strip()
+                    if "api.ollama.com" in _raw_ollama_api:
+                        _raw_ollama_api = _raw_ollama_api.replace("api.ollama.com", "ollama.com")
+                    settings.ollama_api_base_url = _raw_ollama_api
                     settings.lmstudio_base_url = (
                         lmstudio_input.value or "http://localhost:1234"
                     ).strip()
@@ -1412,14 +1413,11 @@ def create_settings_dialog(
                     state.provider = settings.provider
                     state.dirty = True
 
-                    # Reload providers when keys or provider changed
-                    keys_changed = old_keys != settings.api_keys
-                    provider_changed = old_provider != settings.provider
-                    if keys_changed or provider_changed:
-                        try:
-                            router.reload_providers()
-                        except Exception:
-                            log.warning("Failed to reload providers")
+                    # Always reload providers so any key/URL/provider changes take effect immediately
+                    try:
+                        router.reload_providers()
+                    except Exception:
+                        log.warning("Failed to reload providers")
 
                     # Live-reload accent color
                     if _new_accent != old_accent:

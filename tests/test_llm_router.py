@@ -239,4 +239,4 @@ class TestOllamaProviderKeyIntegration:
         )
         router = ProviderRouter(settings)
         provider, _ = router.get_provider("llama3.3", explicit_provider="ollama-api")
-        assert str(provider._client.base_url).rstrip("/") == "https://api.ollama.com/v1"
+        assert str(provider._client.base_url).rstrip("/") == "https://ollama.com/v1"

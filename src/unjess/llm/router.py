@@ -197,7 +197,9 @@ class ProviderRouter:
         )
         if ollama_api_key and ollama_api_key != "ollama":
             try:
-                ollama_api_url = getattr(self._settings, "ollama_api_base_url", "https://api.ollama.com").rstrip("/")
+                ollama_api_url = getattr(self._settings, "ollama_api_base_url", "https://ollama.com").rstrip("/")
+                if "api.ollama.com" in ollama_api_url:
+                    ollama_api_url = ollama_api_url.replace("api.ollama.com", "ollama.com")
                 if not ollama_api_url.endswith("/v1"):
                     ollama_api_url = f"{ollama_api_url}/v1"
                 self._providers["ollama-api"] = OpenAICompatibleProvider(
@@ -502,7 +504,9 @@ class ProviderRouter:
                 timeout=300.0,
             )
         elif provider == "ollama-api":
-            ollama_api_url = getattr(self._settings, "ollama_api_base_url", "https://api.ollama.com").rstrip("/")
+            ollama_api_url = getattr(self._settings, "ollama_api_base_url", "https://ollama.com").rstrip("/")
+            if "api.ollama.com" in ollama_api_url:
+                ollama_api_url = ollama_api_url.replace("api.ollama.com", "ollama.com")
             if not ollama_api_url.endswith("/v1"):
                 ollama_api_url = f"{ollama_api_url}/v1"
             self._providers["ollama-api"] = OpenAICompatibleProvider(

@@ -195,7 +195,9 @@ def _fetch_ollama_api_models(settings: Optional[Settings] = None) -> list[tuple[
     key = _get_api_key("ollama-api", "OLLAMA_API_KEY", settings) or _get_api_key("ollama", "OLLAMA_API_KEY", settings)
     if not key:
         return _PROVIDER_MODELS.get("ollama-api", [])
-    base_url = (getattr(settings, "ollama_api_base_url", None) or "https://api.ollama.com").rstrip("/")
+    base_url = (getattr(settings, "ollama_api_base_url", None) or "https://ollama.com").rstrip("/")
+    if "api.ollama.com" in base_url:
+        base_url = base_url.replace("api.ollama.com", "ollama.com")
     try:
         raw = _api_get_models(f"{base_url}/v1/models", key)
         models: list[tuple[str, str]] = []

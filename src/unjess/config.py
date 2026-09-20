@@ -46,7 +46,7 @@ class Settings:
 
     # --- Provider base URLs (for Ollama / custom endpoints) ---
     ollama_base_url: str = "http://localhost:11434"
-    ollama_api_base_url: str = "https://api.ollama.com"
+    ollama_api_base_url: str = "https://ollama.com"
     llamacpp_base_url: str = "http://localhost:8080"
     lmstudio_base_url: str = "http://localhost:1234"
     kimi_base_url: str = "https://api.moonshot.ai/v1"
