@@ -8,6 +8,8 @@ tmp_ret = collect_all('nicegui')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('unjess')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('playwright')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
@@ -19,7 +21,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['torch', 'torchvision', 'torchaudio', 'onnxruntime', 'cv2', 'opencv', 'playwright', 'selenium', 'polars', 'pyarrow', 'scipy', 'matplotlib', 'pandas', 'numpy', 'transformers', 'imageio_ffmpeg', 'av', 'pygame', 'hf_xet', 'huggingface_hub', 'datasets', 'tensorflow', 'keras', 'sklearn', 'IPython', 'jupyter', 'notebook', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'tkinter'],
+    excludes=['torch', 'torchvision', 'torchaudio', 'onnxruntime', 'cv2', 'opencv', 'selenium', 'polars', 'pyarrow', 'scipy', 'matplotlib', 'pandas', 'numpy', 'transformers', 'imageio_ffmpeg', 'av', 'pygame', 'hf_xet', 'huggingface_hub', 'datasets', 'tensorflow', 'keras', 'sklearn', 'IPython', 'jupyter', 'notebook', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'tkinter'],
     noarchive=False,
     optimize=0,
 )

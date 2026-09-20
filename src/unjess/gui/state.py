@@ -210,8 +210,10 @@ class AppState:
         # Local conversation entries (fallback when memory_store is None)
         self.local_conversations: list[dict[str, Any]] = []
 
-        # Per-conversation message cache (survives switching)
+        # Per-conversation caches (survives switching)
         self._message_cache: dict[str, list[ChatMessage]] = {}
+        self._files_changed_cache: dict[str, list[dict[str, Any]]] = {}
+        self._artifacts_cache: dict[str, list[dict[str, Any]]] = {}
 
         # Load persisted data from disk
         self._load_conversations()

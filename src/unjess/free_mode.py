@@ -58,8 +58,8 @@ _FREE_TIERS: list[FreeTier] = [
     ),
     FreeTier(
         provider="google",
-        model="gemini-2.5-flash",
-        display_name="Gemini 2.5 Flash",
+        model="gemini-3.1-flash",
+        display_name="Gemini 3.1 Flash",
         daily_request_limit=1500,
         daily_token_limit=1_000_000,
         rpm_limit=15,

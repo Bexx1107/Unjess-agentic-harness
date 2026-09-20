@@ -124,7 +124,7 @@ class TestCostTrackerEstimation:
 
     def test_gemini_flash_cost(self) -> None:
         ct = CostTracker()
-        cost = ct.estimate_cost("gemini-2.5-flash", 1_000_000, 1_000_000)
+        cost = ct.estimate_cost("gemini-3.1-flash", 1_000_000, 1_000_000)
         assert cost == pytest.approx(0.75)
 
     def test_free_model_returns_zero(self) -> None:
@@ -346,21 +346,20 @@ class TestCostTrackerPersistence:
 
     def test_persist_cost_writes_jsonl(self, tmp_path: Path) -> None:
         ct = CostTracker()
-        ct.record_llm_call("gpt-4o", tokens_in=1000, tokens_out=500)
 
-        fake_history = tmp_path / "cost_history.jsonl"
         with patch("pathlib.Path.home", return_value=tmp_path / ".home"):
             home_unjess = tmp_path / ".home" / ".unjess"
             home_unjess.mkdir(parents=True, exist_ok=True)
             expected_file = home_unjess / "cost_history.jsonl"
 
-            ct.persist_cost()
+            # Record call inside patched home environment
+            ct.record_llm_call("gpt-4o", tokens_in=1000, tokens_out=500)
 
             assert expected_file.exists()
             entries = _read_jsonl(expected_file)
             assert len(entries) == 1
-            assert "timestamp" in entries[0]
-            assert entries[0]["llm_calls"] == 1
+            assert "ts" in entries[0]
+            assert entries[0]["tokens_in"] == 1000
 
     def test_get_daily_cost_no_file(self, tmp_path: Path) -> None:
         with patch("pathlib.Path.home", return_value=tmp_path):
@@ -639,7 +638,7 @@ class TestCostRatesData:
             assert out >= 0, f"{model}: negative output rate"
 
     def test_known_models_present(self) -> None:
-        must_have = ["gpt-4o", "claude-sonnet-4", "gemini-2.5-flash", "o3", "grok-3"]
+        must_have = ["gpt-4o", "claude-sonnet-4", "gemini-3.1-flash", "o3", "grok-3"]
         for m in must_have:
             assert m in _COST_RATES, f"Missing model: {m}"
 

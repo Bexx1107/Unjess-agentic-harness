@@ -138,12 +138,19 @@ class AnthropicProvider(LLMProvider):
         Returns:
             List of model ID strings.
         """
-        return [
-            "claude-opus-4-20250514",
-            "claude-sonnet-4-20250514",
-            "claude-3.5-sonnet-20241022",
-            "claude-3.5-haiku-20241022",
-        ]
+        try:
+            # The anthropic sdk has a models.list() endpoint in recent versions
+            response = self._client.models.list()
+            # The response is a SyncPage[Model] where each item has an `id`
+            return sorted([m.id for m in response.data])
+        except Exception as e:
+            logger.warning(f"Failed to fetch Anthropic models: {e}")
+            return [
+                "claude-opus-4-20250514",
+                "claude-sonnet-4-20250514",
+                "claude-3.5-sonnet-20241022",
+                "claude-3.5-haiku-20241022",
+            ]
 
     # ----- non-streaming -----
 

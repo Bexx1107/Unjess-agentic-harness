@@ -24,10 +24,13 @@ def _get_driver() -> BrowserDriver:
         _driver = BrowserDriver(headless=True)
     if not _driver.is_available:
         raise RuntimeError(
-            "Playwright is not installed. Run: pip install playwright && playwright install chromium"
+            "Playwright is not installed. Run: pip install playwright && python -m playwright install chromium"
         )
     if not _driver.is_started:
-        _driver.start()
+        if not _driver.start():
+            raise RuntimeError(
+                "Failed to start browser. Ensure Chromium is installed: python -m playwright install chromium"
+            )
     return _driver
 
 

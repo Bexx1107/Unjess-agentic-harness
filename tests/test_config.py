@@ -202,8 +202,13 @@ class TestLoadEnvKeys:
         assert s.api_keys == {}
 
     def test_env_key_map_covers_expected_providers(self) -> None:
-        expected = {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
-                    "GROQ_API_KEY", "MISTRAL_API_KEY"}
+        expected = {
+            "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
+            "GROQ_API_KEY", "MISTRAL_API_KEY", "XAI_API_KEY",
+            "OPENROUTER_API_KEY", "CEREBRAS_API_KEY", "MOONSHOT_API_KEY",
+            "KIMI_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY",
+            "OLLAMA_API_KEY",
+        }
         assert set(_ENV_KEY_MAP.keys()) == expected
 
     def test_all_env_keys_loaded(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -466,12 +471,25 @@ class TestIsFirstRun:
         with patch("unjess.config._load_saved_keys", return_value=({}, {})):
             assert is_first_run(config_path) is True
 
-    def test_not_first_run_when_model_configured(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_not_first_run_when_keys_configured(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         for env_var in _ENV_KEY_MAP:
             monkeypatch.delenv(env_var, raising=False)
 
         config_path = tmp_path / "config.yaml"
-        save_config(Settings(model="gpt-4o"), config_path)
+        settings = Settings(model="gpt-4o")
+        settings.api_keys["openai"] = "some-key"
+        save_config(settings, config_path)
+
+        with patch("unjess.config._load_saved_keys", return_value=({"openai": "some-key"}, {})):
+            assert is_first_run(config_path) is False
+
+    def test_not_first_run_when_ollama(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        for env_var in _ENV_KEY_MAP:
+            monkeypatch.delenv(env_var, raising=False)
+
+        config_path = tmp_path / "config.yaml"
+        settings = Settings(provider="ollama", model="qwen3.5:9b")
+        save_config(settings, config_path)
 
         with patch("unjess.config._load_saved_keys", return_value=({}, {})):
             assert is_first_run(config_path) is False

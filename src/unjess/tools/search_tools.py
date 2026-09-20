@@ -54,6 +54,16 @@ def _search_with_ripgrep(
     """Run ripgrep and format results."""
     cmd = [rg_path, "--line-number", "--no-heading", "--color=never", f"--max-count={_MAX_RESULTS}"]
 
+    # Add default safety ignores for heavy system/cache/browser folders
+    ignore_globs = [
+        "!**/AppData/**", "!**/node_modules/**", "!**/.git/**", "!**/dist/**",
+        "!**/build/**", "!**/site-packages/**", "!**/venv/**", "!**/.venv/**",
+        "!**/__pycache__/**", "!**/.cargo/**", "!**/.rustup/**", "!**/.cache/**",
+        "!**/brave_session_*/**", "!**/Cache_Data/**", "!**/Code Cache/**",
+    ]
+    for glob_pat in ignore_globs:
+        cmd.extend(["--glob", glob_pat])
+
     if case_insensitive:
         cmd.append("--ignore-case")
     if not regex:
@@ -91,6 +101,15 @@ def _search_with_ripgrep(
     return f"Found {count} match(es) for '{query}':\n\n" + "\n".join(lines)
 
 
+_IGNORED_DIRS = {
+    "node_modules", "venv", ".venv", "__pycache__", "appdata",
+    "application data", "local settings", "dist", "build", ".git",
+    "site-packages", ".cargo", ".rustup", ".nuget", ".electron",
+    "brave_session_1", "cache_data", "code cache", "gpucache",
+    ".gradle", ".m2", ".cache", ".npm", "target"
+}
+
+
 def _search_with_python(
     query: str,
     search_path: Path,
@@ -112,17 +131,33 @@ def _search_with_python(
 
     results: list[str] = []
 
-    if search_path.is_file():
-        files = [search_path]
-    else:
-        files = [
-            f for f in search_path.rglob("*")
-            if f.is_file()
-            and not any(part.startswith(".") for part in f.parts)
-            and f.suffix not in (".pyc", ".pyo", ".so", ".dll", ".exe", ".bin")
-        ]
+    def _iter_files():
+        if search_path.is_file():
+            yield search_path
+            return
+            
+        import os
+        for root, dirs, files in os.walk(search_path):
+            # Prune hidden & system dirs in-place to prevent entering them
+            dirs[:] = [
+                d for d in dirs
+                if not d.startswith(".") and d.lower() not in _IGNORED_DIRS
+            ]
+            
+            for file in files:
+                if file.startswith("."):
+                    continue
+                if file.lower().endswith((".pyc", ".pyo", ".so", ".dll", ".exe", ".bin", ".zip", ".tar", ".gz", ".7z", ".iso", ".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mp3", ".wav")):
+                    continue
+                fp = Path(root) / file
+                try:
+                    if fp.stat().st_size > 2_000_000:  # Skip files > 2MB
+                        continue
+                except OSError:
+                    continue
+                yield fp
 
-    for fpath in files:
+    for fpath in _iter_files():
         if len(results) >= _MAX_RESULTS:
             break
 

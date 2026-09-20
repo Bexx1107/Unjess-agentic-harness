@@ -2,14 +2,20 @@
 
 Route: ``/onboarding``
 
-A multi-step stepper flow that guides new users through provider
-selection, API key entry, and model choice.  On completion the
-settings are saved and the user is redirected to the chat page.
+A clean, screen-by-screen setup wizard that guides new users through:
+1. Welcome & Introduction
+2. AI Provider Selection
+3. API Key Configuration
+4. Model Selection
+5. Completion & Launch
+
+On completion the settings are saved and the user is redirected to the chat page.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -20,107 +26,135 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_STYLES_PATH = Path(__file__).resolve().parent.parent / "static" / "styles.css"
-
 # Provider cards for the selection step
 _PROVIDER_CARDS: list[dict[str, str]] = [
     {
         "value": "google",
-        "name": "Google (Gemini)",
-        "desc": "Gemini 2.5 Flash — FREE tier available ⭐",
+        "name": "Google Gemini",
+        "desc": "Gemini 3.1 Flash — generous free tier available",
+        "badge": "FREE TIER",
+        "badge_color": "#10b981",
         "icon": "🌐",
+    },
+    {
+        "value": "ollama",
+        "name": "Ollama (Local)",
+        "desc": "Run open models locally — no key or internet needed",
+        "badge": "FREE / LOCAL",
+        "badge_color": "#10b981",
+        "icon": "💻",
+    },
+    {
+        "value": "ollama-api",
+        "name": "Ollama API",
+        "desc": "Access Ollama cloud models with your subscription",
+        "badge": "CLOUD API",
+        "badge_color": "#8b5cf6",
+        "icon": "☁️",
     },
     {
         "value": "openrouter",
         "name": "OpenRouter",
-        "desc": "50+ FREE models — zero cost to start ⭐",
+        "desc": "50+ free models — unified gateway to open AI",
+        "badge": "FREE TIER",
+        "badge_color": "#10b981",
         "icon": "🔀",
     },
     {
         "value": "groq",
         "name": "Groq",
-        "desc": "Llama 3.3 — FREE & ultra-fast inference",
+        "desc": "Llama 3.3 70B — ultra-fast free tier",
+        "badge": "FREE TIER",
+        "badge_color": "#10b981",
         "icon": "⚡",
     },
     {
         "value": "cerebras",
         "name": "Cerebras",
-        "desc": "ZAI GLM 4.7 — FREE & fast",
+        "desc": "ZAI GLM 4.7 — ultra-high throughput free tier",
+        "badge": "FREE TIER",
+        "badge_color": "#10b981",
         "icon": "🧠",
     },
     {
         "value": "mistral",
         "name": "Mistral",
-        "desc": "Codestral — FREE for code generation",
+        "desc": "Codestral — state-of-the-art coding model",
+        "badge": "FREE TIER",
+        "badge_color": "#10b981",
         "icon": "🇫🇷",
     },
     {
         "value": "openai",
         "name": "OpenAI",
-        "desc": "GPT-4o, o4-mini — paid, most popular",
+        "desc": "GPT-4o, o4-mini — flagship intelligence",
+        "badge": "PAID",
+        "badge_color": "#6b7280",
         "icon": "🤖",
     },
     {
         "value": "anthropic",
         "name": "Anthropic",
-        "desc": "Claude Sonnet 4, Opus 4 — paid, excellent for code",
+        "desc": "Claude 3.7 / 3.5 Sonnet — exceptional for code",
+        "badge": "PAID",
+        "badge_color": "#6b7280",
         "icon": "🏛️",
     },
     {
         "value": "xai",
-        "name": "xAI / Grok",
-        "desc": "Grok 4.1 Fast — cheap & fast",
+        "name": "xAI (Grok)",
+        "desc": "Grok 4.1 Fast — ultra-low latency & cost",
+        "badge": "PAID",
+        "badge_color": "#6b7280",
         "icon": "🚀",
-    },
-    {
-        "value": "ollama",
-        "name": "Ollama (Local)",
-        "desc": "Run open models locally — no API key needed",
-        "icon": "💻",
     },
 ]
 
 # Models per provider (value, label, description)
 _MODELS_PER_PROVIDER: dict[str, list[tuple[str, str, str]]] = {
     "google": [
-        ("gemini-2.5-flash", "Gemini 2.5 Flash", "Fast & FREE tier available"),
-        ("gemini-2.5-pro", "Gemini 2.5 Pro", "Most capable — limited free tier"),
-    ],
-    "openai": [
-        ("gpt-4o", "GPT-4o", "Most capable — great for complex tasks"),
-        ("gpt-4o-mini", "GPT-4o mini", "Fast & cheap — good default"),
-        ("o4-mini", "o4-mini", "Reasoning model — best for hard problems"),
-    ],
-    "anthropic": [
-        ("claude-sonnet-4-20250514", "Claude Sonnet 4", "Best balance of speed and quality"),
-        ("claude-opus-4-20250514", "Claude Opus 4", "Most capable — slow but powerful"),
-    ],
-    "groq": [
-        ("llama-3.3-70b-versatile", "Llama 3.3 70B", "Fast & FREE — great for coding"),
-        ("llama-3.1-8b-instant", "Llama 3.1 8B", "Ultra-fast & FREE"),
-        ("mixtral-8x7b-32768", "Mixtral 8x7B", "FREE — 32K context"),
-    ],
-    "mistral": [
-        ("codestral-latest", "Codestral", "FREE for code — best code model"),
-        ("mistral-small-latest", "Mistral Small", "FREE tier — fast general"),
-    ],
-    "xai": [
-        ("grok-4.1-fast", "Grok 4.1 Fast", "Cheap & fast"),
-        ("grok-4.3", "Grok 4.3", "Flagship — most capable"),
-    ],
-    "openrouter": [
-        ("openrouter/free", "Auto-Free", "Auto-picks best FREE model"),
-        ("nvidia/nemotron-3-ultra:free", "Nemotron 3 Ultra", "FREE — 1M context"),
-        ("qwen/qwen3-coder:free", "Qwen 3 Coder", "FREE — code gen, 1M context"),
-    ],
-    "cerebras": [
-        ("zai-glm-4.7", "ZAI GLM 4.7", "FREE — fast inference, 131K context"),
-        ("llama-3.1-70b", "Llama 3.1 70B", "FREE — Meta's open model"),
+        ("gemini-3.1-flash", "Gemini 3.1 Flash", "Ultra-fast & generous free tier (Recommended)"),
+        ("gemini-3.1-pro", "Gemini 3.1 Pro", "Deep reasoning and high capability"),
     ],
     "ollama": [
-        ("llama3.1", "Llama 3.1", "Meta's open model — runs locally"),
-        ("codestral", "Codestral", "Mistral's code model — local"),
-        ("qwen2.5-coder", "Qwen 2.5 Coder", "Alibaba's code model — local"),
+        ("llama3.1", "Llama 3.1", "Meta open weights — runs locally on your machine"),
+        ("codestral-v2", "Codestral", "Mistral code generation model — local"),
+        ("qwen2.5-coder", "Qwen 2.5 Coder", "Alibaba code model — local"),
+    ],
+    "ollama-api": [
+        ("llama3.3", "Llama 3.3", "Meta flagship model — Ollama Cloud API"),
+        ("deepseek-r1", "DeepSeek R1", "High-performance reasoning — Ollama Cloud"),
+        ("qwen2.5-coder:32b", "Qwen 2.5 Coder 32B", "Alibaba code model — Ollama Cloud"),
+    ],
+    "openrouter": [
+        ("openrouter/free", "Auto-Free", "Automatically routes to best available free model"),
+        ("nvidia/nemotron-3-ultra:free", "Nemotron 3 Ultra", "FREE — 1M context coding model"),
+        ("qwen/qwen3-coder:free", "Qwen 3 Coder", "FREE — code generation, 1M context"),
+    ],
+    "groq": [
+        ("llama-3.3-70b-versatile", "Llama 3.3 70B", "Fast & FREE — great general coding model"),
+        ("llama-3.1-8b-instant", "Llama 3.1 8B", "Ultra-fast lightweight model"),
+    ],
+    "cerebras": [
+        ("zai-glm-4.7", "ZAI GLM 4.7", "FREE — ultra-fast inference, 131K context"),
+        ("llama-3.1-70b", "Llama 3.1 70B", "FREE — Meta open model on Cerebras hardware"),
+    ],
+    "mistral": [
+        ("codestral-latest", "Codestral", "FREE for code — specialized code generation"),
+        ("mistral-small-latest", "Mistral Small", "FREE tier — fast general purpose"),
+    ],
+    "openai": [
+        ("gpt-4o-mini", "GPT-4o mini", "Fast & cheap — excellent default"),
+        ("gpt-4o", "GPT-4o", "Most capable — great for complex tasks"),
+        ("o4-mini", "o4-mini", "Reasoning model — best for hard math/logic"),
+    ],
+    "anthropic": [
+        ("claude-sonnet-4-20250514", "Claude Sonnet 4", "Best balance of speed and code quality"),
+        ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "Fast & lightweight"),
+    ],
+    "xai": [
+        ("grok-4.1-fast", "Grok 4.1 Fast", "Fast and economical"),
+        ("grok-4.3", "Grok 4.3", "Flagship model"),
     ],
 }
 
@@ -135,7 +169,16 @@ _KEY_HELP_URLS: dict[str, str] = {
     "openrouter": "https://openrouter.ai/settings/keys",
     "cerebras": "https://cloud.cerebras.ai/",
     "ollama": "",  # no key needed
+    "ollama-api": "https://ollama.com",
 }
+
+STEP_TITLES = [
+    (1, "Welcome"),
+    (2, "Provider"),
+    (3, "API Key"),
+    (4, "Model"),
+    (5, "Ready"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -149,282 +192,518 @@ def setup_onboarding_page(
 ) -> None:
     """Build the first-run onboarding wizard at route ``/onboarding``.
 
-    Uses NiceGUI's ``ui.stepper`` for a 5-step flow:
-
-    1. **Welcome** — logo + description + "Get Started" button.
-    2. **Provider** — cards for each provider with free-tier indicators.
-    3. **API Key** — input field + help link.
-    4. **Model** — radio list of models for the selected provider.
-    5. **Ready** — summary + "Start Chatting" button.
-
-    On completion, saves settings and redirects to ``/`` (chat page).
+    Presents a clean screen-by-screen wizard rather than a tall vertical list,
+    guaranteeing full scrollability and proper viewport visibility on all screens.
 
     Args:
-        state: The AppState instance (unused in onboarding but passed by app.py).
-        settings: The mutable :class:`Settings` instance to populate.
-        router: The provider router (unused in onboarding but passed by app.py).
+        state: AppState instance (passed by app.py).
+        settings: Mutable Settings instance to populate.
+        router: ProviderRouter instance (reloaded upon completion).
     """
-    if _STYLES_PATH.exists():
-        ui.add_css(_STYLES_PATH.read_text(encoding="utf-8"))
-
     ui.dark_mode(True)
 
-    # Wizard state — mutable dict so closures can share it
+    # Force page scrollability and custom styling for the wizard
+    ui.add_head_html("""
+    <style>
+        html, body {
+            height: auto !important;
+            min-height: 100% !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            background-color: #0a0a0a !important;
+            margin: 0;
+            padding: 0;
+        }
+        .wizard-card {
+            background: #141414;
+            border: 1px solid #242424;
+            border-radius: 14px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        .prov-card {
+            background: #191919;
+            border: 1.5px solid #282828;
+            border-radius: 10px;
+            padding: 10px 12px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .prov-card:hover {
+            border-color: #7c3aed;
+            background: #1f1b29;
+            transform: translateY(-1px);
+        }
+        .prov-card.active {
+            border-color: #a855f7 !important;
+            background: rgba(168, 85, 247, 0.12) !important;
+            box-shadow: 0 0 12px rgba(168, 85, 247, 0.2);
+        }
+        .model-card {
+            background: #191919;
+            border: 1.5px solid #282828;
+            border-radius: 10px;
+            padding: 12px 14px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .model-card:hover {
+            border-color: #7c3aed;
+            background: #1f1b29;
+        }
+        .model-card.active {
+            border-color: #a855f7 !important;
+            background: rgba(168, 85, 247, 0.12) !important;
+        }
+        .step-circle {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            transition: all 0.2s ease;
+        }
+        .step-circle.active {
+            background: #a855f7;
+            color: #ffffff;
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+        }
+        .step-circle.completed {
+            background: #22c55e;
+            color: #ffffff;
+        }
+        .step-circle.pending {
+            background: #262626;
+            color: #737373;
+        }
+        .step-connector {
+            flex: 1;
+            height: 2px;
+            background: #262626;
+            margin: 0 6px;
+        }
+        .step-connector.completed {
+            background: #a855f7;
+        }
+    </style>
+    """)
+
     wiz: dict[str, str] = {
         "provider": "google",
         "api_key": "",
-        "model": "gemini-2.5-flash",
+        "model": "gemini-3.1-flash",
+        "ollama_base_url": getattr(settings, "ollama_base_url", "http://localhost:11434") if settings else "http://localhost:11434",
     }
 
+    current_step_holder: dict[str, int] = {"step": 1}
+
+    # Outer scrollable page wrapper
     with ui.column().classes(
-        "w-full max-w-xl mx-auto q-pa-lg"
-    ).style("min-height:100vh"):
+        "w-full min-h-screen items-center justify-start py-8 px-4 sm:px-6"
+    ).style("background: #0a0a0a; overflow-y: auto;"):
 
-        # ── Logo ────────────────────────────────────────────────────────
-        with ui.column().classes("items-center q-mb-lg"):
-            ui.label("🟣").style("font-size:48px")
-            ui.label("njss").classes(
-                "text-h4 text-weight-bold"
-            ).style("color:#c084fc; letter-spacing:2px")
-            ui.label(
-                "AI coding agent — let's get you set up"
-            ).classes("text-subtitle2 text-grey-5 q-mt-xs")
+        with ui.column().classes("w-full max-w-xl mx-auto items-center gap-4"):
 
-        # ── Stepper ─────────────────────────────────────────────────────
-        with ui.stepper().props(
-            'vertical animated dark color="deep-purple-6"'
-        ).classes("w-full") as stepper:
+            # ── Brand Header ───────────────────────────────────────────
+            with ui.row().classes("items-center gap-2 mb-1"):
+                ui.label("🟣").style("font-size: 26px;")
+                ui.label("njss").classes("text-2xl font-bold tracking-wider").style("color: #c084fc;")
+                ui.label("•").classes("text-gray-600 text-sm")
+                ui.label("Setup Assistant").classes("text-gray-400 text-sm")
 
-            # Step 1: Welcome
-            with ui.step("Welcome"):
-                ui.markdown(
-                    "**Welcome to Unjess!**\n\n"
-                    "njss is a full-featured AI coding agent that lives in your "
-                    "terminal (and now your browser). It can:\n\n"
-                    "- 📝 Read, write, and edit files\n"
-                    "- 🔧 Run shell commands\n"
-                    "- 🔍 Search the web and your codebase\n"
-                    "- 💡 Plan and execute complex tasks\n\n"
-                    "Let's configure your first AI provider."
-                ).classes("text-grey-4")
-                with ui.stepper_navigation():
-                    ui.button(
-                        "Get Started →",
-                        on_click=stepper.next,
-                    ).props('color="deep-purple-6" unelevated')
+            # ── Step Progress Bar ──────────────────────────────────────
+            progress_bar = ui.column().classes("w-full items-center gap-2 mb-2")
 
-            # Step 2: Provider selection
-            with ui.step("Choose Provider"):
-                ui.label("Pick an AI provider:").classes(
-                    "text-weight-medium text-white q-mb-sm"
-                )
+            def _render_progress() -> None:
+                progress_bar.clear()
+                curr = current_step_holder["step"]
+                with progress_bar:
+                    # Dots and connectors
+                    with ui.row().classes("w-full items-center justify-between px-3"):
+                        for i, (step_num, title) in enumerate(STEP_TITLES):
+                            if step_num < curr:
+                                status_class = "completed"
+                                label_content = "✓"
+                            elif step_num == curr:
+                                status_class = "active"
+                                label_content = str(step_num)
+                            else:
+                                status_class = "pending"
+                                label_content = str(step_num)
 
-                for card_info in _PROVIDER_CARDS:
-                    _val = card_info["value"]
-                    _render_provider_card(card_info, wiz)
+                            ui.label(label_content).classes(f"step-circle {status_class}")
 
-                with ui.stepper_navigation():
-                    ui.button("Back", on_click=stepper.previous).props("flat")
-                    ui.button("Next →", on_click=stepper.next).props(
-                        'color="deep-purple-6" unelevated'
+                            if i < len(STEP_TITLES) - 1:
+                                line_class = "completed" if step_num < curr else ""
+                                ui.element("div").classes(f"step-connector {line_class}")
+
+                    # Step title text
+                    curr_title = next(t for n, t in STEP_TITLES if n == curr)
+                    ui.label(f"Step {curr} of {len(STEP_TITLES)}: {curr_title}").classes(
+                        "text-xs font-medium text-purple-400"
                     )
 
-            # Step 3: API key
-            with ui.step("API Key"):
-                key_info = ui.label("").classes("text-weight-medium text-white q-mb-xs")
-                key_help = ui.html("").classes("q-mb-sm")
-                key_input = ui.input(
-                    label="Paste your API key",
-                    password=True,
-                    password_toggle_button=True,
-                ).classes("w-full").props('dark dense color="purple-4"')
+            # ── Screen Container Card ──────────────────────────────────
+            card = ui.column().classes("w-full wizard-card p-6 sm:p-8 gap-5")
 
-                ollama_note = ui.label(
-                    "Ollama runs locally — no API key needed. Just make sure "
-                    "Ollama is running on your machine."
-                ).classes("text-sm text-grey-5").style("display:none")
+            def _render_screen() -> None:
+                card.clear()
+                curr = current_step_holder["step"]
+                _render_progress()
 
-                def _refresh_key_step() -> None:
-                    """Update the key step UI for the selected provider."""
-                    prov = wiz["provider"]
-                    if prov == "ollama":
-                        key_info.set_text("Ollama — no key required")
-                        key_input.set_visibility(False)
-                        ollama_note.style("display:block")
-                        key_help.content = ""
-                    else:
-                        key_info.set_text(f"Enter your {prov.title()} API key:")
-                        key_input.set_visibility(True)
-                        ollama_note.style("display:none")
-                        url = _KEY_HELP_URLS.get(prov, "")
-                        if url:
-                            key_help.content = (
-                                f'<a href="{url}" target="_blank" '
-                                f'style="color:#c084fc;font-size:13px">'
-                                f'Get a {prov.title()} key →</a>'
-                            )
-                        else:
-                            key_help.content = ""
-
-                # Refresh on step entry via timer
-                ui.timer(0.3, _refresh_key_step, once=True)
-
-                with ui.stepper_navigation():
-                    ui.button("Back", on_click=stepper.previous).props("flat")
-
-                    def _step3_next() -> None:
-                        wiz["api_key"] = key_input.value.strip()
-                        _refresh_key_step()  # ensure state is current
-                        stepper.next()
-
-                    ui.button("Next →", on_click=_step3_next).props(
-                        'color="deep-purple-6" unelevated'
-                    )
-
-            # Step 4: Model selection
-            with ui.step("Choose Model"):
-                ui.label("Select a model:").classes(
-                    "text-weight-medium text-white q-mb-sm"
-                )
-                model_container = ui.column().classes("w-full gap-xs")
-
-                def _refresh_models() -> None:
-                    """Re-populate model list for the selected provider."""
-                    model_container.clear()
-                    prov = wiz["provider"]
-                    models = _MODELS_PER_PROVIDER.get(prov, [])
-                    if not models:
-                        with model_container:
-                            ui.label("No models available.").classes(
-                                "text-sm text-grey-6"
-                            )
-                        return
-
-                    # Default to first model
-                    if not wiz["model"] or not any(
-                        m[0] == wiz["model"] for m in models
-                    ):
-                        wiz["model"] = models[0][0]
-
-                    with model_container:
-                        model_radio = ui.radio(
-                            options={
-                                val: f"{label} — {desc}"
-                                for val, label, desc in models
-                            },
-                            value=wiz["model"],
-                        ).classes("w-full").props('dark color="purple-4"')
-
-                        def on_model(e: object) -> None:
-                            wiz["model"] = getattr(e, "value", "")
-
-                        model_radio.on_value_change(on_model)
-
-                ui.timer(0.3, _refresh_models, once=True)
-
-                with ui.stepper_navigation():
-                    ui.button("Back", on_click=stepper.previous).props("flat")
-                    ui.button("Next →", on_click=stepper.next).props(
-                        'color="deep-purple-6" unelevated'
-                    )
-
-            # Step 5: Ready!
-            with ui.step("Ready!"):
-                summary = ui.column().classes("w-full gap-xs")
-
-                def _refresh_summary() -> None:
-                    summary.clear()
-                    key_set = bool(
-                        wiz["api_key"] or wiz["provider"] == "ollama"
-                    )
-                    with summary:
-                        ui.markdown(
-                            f"**Provider:** {wiz['provider'].title()}\n\n"
-                            f"**Model:** `{wiz['model']}`\n\n"
-                            f"**API Key:** {'configured ✓' if key_set else '⚠️ not set'}\n\n"
-                            "You can change these anytime in **Settings**."
-                        ).classes("text-grey-4")
-
-                ui.timer(0.3, _refresh_summary, once=True)
-
-                with ui.stepper_navigation():
-                    ui.button("Back", on_click=stepper.previous).props("flat")
-
-                    def _finish() -> None:
-                        if settings is None:
-                            ui.notify("Settings not available", type="warning")
-                            return
-                        _apply_wizard_settings(settings, wiz)
-                        ui.notify(
-                            "Setup complete! 🎉",
-                            type="positive",
-                            position="top",
+                with card:
+                    # ==========================================================
+                    # SCREEN 1: WELCOME
+                    # ==========================================================
+                    if curr == 1:
+                        ui.label("Welcome to Unjess (njss)").classes(
+                            "text-xl font-bold text-white"
                         )
-                        ui.navigate.to("/")
+                        ui.label(
+                            "Your personal, autonomous AI pair programmer that runs locally or connects to your favorite cloud models."
+                        ).classes("text-sm text-gray-400 -mt-2 leading-relaxed")
 
-                    ui.button(
-                        "🚀 Start Chatting",
-                        on_click=_finish,
-                    ).props('color="deep-purple-6" unelevated').style(
-                        "font-weight:600"
-                    )
+                        # Features list
+                        with ui.column().classes("w-full gap-3 py-2"):
+                            features = [
+                                ("📂", "Workspace Native", "Inspects, creates, and refactors project files directly in your repository."),
+                                ("⚡", "Local or Cloud", "Free local models via Ollama or state-of-the-art models from Google, Anthropic, OpenAI, and Groq."),
+                                ("🔒", "Private & Secure", "All keys and conversation transcripts remain sandboxed on your computer."),
+                            ]
+                            for icon, title, desc in features:
+                                with ui.row().classes("items-start gap-3 p-2.5 rounded-lg").style(
+                                    "background: rgba(255,255,255,0.02); border: 1px solid #222;"
+                                ):
+                                    ui.label(icon).classes("text-lg")
+                                    with ui.column().classes("gap-0"):
+                                        ui.label(title).classes("text-xs font-semibold text-gray-200")
+                                        ui.label(desc).classes("text-[11px] text-gray-400")
+
+                        ui.label("Let's take 60 seconds to configure your default model.").classes(
+                            "text-xs text-purple-300 italic"
+                        )
+
+                        # Navigation
+                        with ui.row().classes("w-full justify-end pt-2"):
+                            def _next_step1() -> None:
+                                current_step_holder["step"] = 2
+                                _render_screen()
+
+                            ui.button(
+                                "Get Started →",
+                                on_click=_next_step1,
+                            ).props('unelevated color="deep-purple-6"').classes("w-full py-2 font-semibold")
+
+                    # ==========================================================
+                    # SCREEN 2: CHOOSE PROVIDER
+                    # ==========================================================
+                    elif curr == 2:
+                        ui.label("Choose your AI Provider").classes(
+                            "text-xl font-bold text-white"
+                        )
+                        ui.label(
+                            "Select the provider you want to use. You can switch providers or add more keys anytime in Settings."
+                        ).classes("text-sm text-gray-400 -mt-2")
+
+                        grid = ui.grid(columns=2).classes("w-full gap-2.5 max-h-[360px] overflow-y-auto pr-1")
+
+                        def _select_provider(val: str) -> None:
+                            wiz["provider"] = val
+                            # Default to first model for provider
+                            models = _MODELS_PER_PROVIDER.get(val, [])
+                            if models:
+                                wiz["model"] = models[0][0]
+                            _render_screen()
+
+                        with grid:
+                            for c in _PROVIDER_CARDS:
+                                val = c["value"]
+                                is_sel = wiz["provider"] == val
+                                card_classes = f"prov-card {'active' if is_sel else ''}"
+
+                                with ui.card().classes(card_classes) as p_card:
+                                    p_card.on("click", lambda _e, v=val: _select_provider(v))
+                                    with ui.row().classes("w-full items-center justify-between no-wrap mb-1"):
+                                        with ui.row().classes("items-center gap-2 no-wrap"):
+                                            ui.label(c["icon"]).classes("text-lg")
+                                            ui.label(c["name"]).classes("text-xs font-semibold text-white")
+                                        ui.label(c["badge"]).classes(
+                                            "text-[9px] font-bold px-1.5 py-0.5 rounded"
+                                        ).style(f"color: {c['badge_color']}; background: {c['badge_color']}18;")
+                                    ui.label(c["desc"]).classes("text-[11px] text-gray-400 leading-tight")
+
+                        # Navigation
+                        with ui.row().classes("w-full justify-between items-center pt-3 border-t border-gray-800"):
+                            def _back_step2() -> None:
+                                current_step_holder["step"] = 1
+                                _render_screen()
+
+                            def _next_step2() -> None:
+                                current_step_holder["step"] = 3
+                                _render_screen()
+
+                            ui.button("← Back", on_click=_back_step2).props("flat color=grey-4")
+                            ui.button("Continue →", on_click=_next_step2).props(
+                                'unelevated color="deep-purple-6"'
+                            ).classes("px-6 font-semibold")
+
+                    # ==========================================================
+                    # SCREEN 3: API KEY
+                    # ==========================================================
+                    elif curr == 3:
+                        prov = wiz["provider"]
+                        prov_info = next((c for c in _PROVIDER_CARDS if c["value"] == prov), None)
+                        prov_name = prov_info["name"] if prov_info else prov.title()
+                        prov_icon = prov_info["icon"] if prov_info else "🔑"
+
+                        with ui.row().classes("items-center gap-2"):
+                            ui.label(prov_icon).classes("text-2xl")
+                            ui.label(f"{prov_name} Setup").classes("text-xl font-bold text-white")
+
+                        if prov == "ollama":
+                            ui.label("Local execution — no API key or account required.").classes(
+                                "text-sm text-gray-400 -mt-2"
+                            )
+
+                            with ui.column().classes("w-full p-4 rounded-xl gap-2").style(
+                                "background: rgba(16, 185, 129, 0.08); border: 1.5px solid rgba(16, 185, 129, 0.3);"
+                            ):
+                                with ui.row().classes("items-center gap-2"):
+                                    ui.label("✓").classes("text-emerald-400 font-bold text-base")
+                                    ui.label("Zero Configuration Required").classes("text-xs font-bold text-emerald-300")
+                                ui.label(
+                                    "Ollama executes models directly on your machine. Just make sure the Ollama application or daemon is running."
+                                ).classes("text-xs text-gray-300 leading-relaxed")
+                                ui.label("Default local port: http://localhost:11434").classes(
+                                    "text-[11px] text-emerald-400/80 font-mono"
+                                )
+
+                            ollama_url_input = ui.input(
+                                label="Ollama Base URL (Optional)",
+                                value=wiz["ollama_base_url"],
+                            ).props("outlined dense dark").classes("w-full mt-2")
+
+                            def _on_ollama_url_change(e: object) -> None:
+                                wiz["ollama_base_url"] = getattr(e, "value", "http://localhost:11434")
+
+                            ollama_url_input.on_value_change(_on_ollama_url_change)
+                        else:
+                            ui.label(f"Enter your {prov_name} API key below to enable agent queries.").classes(
+                                "text-sm text-gray-400 -mt-2"
+                            )
+
+                            key_input = ui.input(
+                                label=f"{prov_name} API Key",
+                                value=wiz["api_key"],
+                                password=True,
+                                password_toggle_button=True,
+                            ).props("outlined dense dark").classes("w-full mt-1")
+
+                            def _on_key_change(e: object) -> None:
+                                wiz["api_key"] = getattr(e, "value", "").strip()
+
+                            key_input.on_value_change(_on_key_change)
+
+                            url = _KEY_HELP_URLS.get(prov, "")
+                            if url:
+                                ui.html(
+                                    f'<a href="{url}" target="_blank" '
+                                    f'style="color:#c084fc; font-size:12px; text-decoration:underline;">'
+                                    f'Need a key? Get an API key from {prov_name} →</a>'
+                                )
+
+                            with ui.row().classes("items-center gap-2 p-3 rounded-lg w-full").style(
+                                "background: rgba(255,255,255,0.02); border: 1px solid #222;"
+                            ):
+                                ui.label("🔒").classes("text-xs")
+                                ui.label(
+                                    "Keys are stored securely in ~/.unjess/keys.yaml and are never sent to third-party tracking services."
+                                ).classes("text-[11px] text-gray-400")
+
+                        # Navigation
+                        with ui.row().classes("w-full justify-between items-center pt-3 border-t border-gray-800"):
+                            def _back_step3() -> None:
+                                current_step_holder["step"] = 2
+                                _render_screen()
+
+                            def _next_step3() -> None:
+                                current_step_holder["step"] = 4
+                                _render_screen()
+
+                            ui.button("← Back", on_click=_back_step3).props("flat color=grey-4")
+                            ui.button("Continue →", on_click=_next_step3).props(
+                                'unelevated color="deep-purple-6"'
+                            ).classes("px-6 font-semibold")
+
+                    # ==========================================================
+                    # SCREEN 4: CHOOSE MODEL
+                    # ==========================================================
+                    elif curr == 4:
+                        prov = wiz["provider"]
+                        prov_info = next((c for c in _PROVIDER_CARDS if c["value"] == prov), None)
+                        prov_name = prov_info["name"] if prov_info else prov.title()
+
+                        ui.label("Select Default Model").classes("text-xl font-bold text-white")
+                        ui.label(f"Choose which model you'd like Unjess to use for {prov_name}.").classes(
+                            "text-sm text-gray-400 -mt-2"
+                        )
+
+                        models = _MODELS_PER_PROVIDER.get(prov, [])
+                        if not wiz["model"] and models:
+                            wiz["model"] = models[0][0]
+
+                        def _select_model(m_id: str) -> None:
+                            wiz["model"] = m_id
+                            _render_screen()
+
+                        with ui.column().classes("w-full gap-2.5 max-h-[340px] overflow-y-auto pr-1"):
+                            for m_id, label, desc in models:
+                                is_sel = wiz["model"] == m_id
+                                m_classes = f"model-card {'active' if is_sel else ''}"
+                                with ui.card().classes(m_classes) as m_card:
+                                    m_card.on("click", lambda _e, mid=m_id: _select_model(mid))
+                                    with ui.row().classes("w-full items-center justify-between no-wrap"):
+                                        with ui.column().classes("gap-0"):
+                                            ui.label(label).classes("text-xs font-semibold text-white")
+                                            ui.label(m_id).classes("text-[10px] text-purple-400 font-mono")
+                                        if is_sel:
+                                            ui.label("✓").classes("text-xs font-bold text-purple-400")
+                                    ui.label(desc).classes("text-[11px] text-gray-400 mt-1")
+
+                        # Custom model input
+                        with ui.expansion("Enter a custom model name", icon="tune").classes("w-full text-xs text-gray-400"):
+                            custom_inp = ui.input(
+                                label="Custom Model ID",
+                                value=wiz["model"],
+                            ).props("outlined dense dark").classes("w-full mt-1")
+
+                            def _on_custom_model_change(e: object) -> None:
+                                val = getattr(e, "value", "").strip()
+                                if val:
+                                    wiz["model"] = val
+
+                            custom_inp.on_value_change(_on_custom_model_change)
+
+                        # Navigation
+                        with ui.row().classes("w-full justify-between items-center pt-3 border-t border-gray-800"):
+                            def _back_step4() -> None:
+                                current_step_holder["step"] = 3
+                                _render_screen()
+
+                            def _next_step4() -> None:
+                                current_step_holder["step"] = 5
+                                _render_screen()
+
+                            ui.button("← Back", on_click=_back_step4).props("flat color=grey-4")
+                            ui.button("Continue →", on_click=_next_step4).props(
+                                'unelevated color="deep-purple-6"'
+                            ).classes("px-6 font-semibold")
+
+                    # ==========================================================
+                    # SCREEN 5: READY & FINISH
+                    # ==========================================================
+                    elif curr == 5:
+                        prov = wiz["provider"]
+                        prov_info = next((c for c in _PROVIDER_CARDS if c["value"] == prov), None)
+                        prov_name = prov_info["name"] if prov_info else prov.title()
+                        prov_icon = prov_info["icon"] if prov_info else "🚀"
+
+                        ui.label("You're All Set!").classes("text-xl font-bold text-white")
+                        ui.label("Unjess is configured and ready for your coding sessions.").classes(
+                            "text-sm text-gray-400 -mt-2"
+                        )
+
+                        # Summary Card
+                        has_key = bool(wiz["api_key"] or prov == "ollama")
+                        with ui.column().classes("w-full p-4 rounded-xl gap-3").style(
+                            "background: rgba(255,255,255,0.02); border: 1px solid #262626;"
+                        ):
+                            ui.label("CONFIGURATION SUMMARY").classes("text-[10px] font-bold text-purple-400 tracking-wider")
+
+                            items = [
+                                ("Provider", f"{prov_icon} {prov_name}"),
+                                ("Default Model", wiz["model"]),
+                                ("Authentication", "Local / Free ✓" if prov == "ollama" else ("API Key Set ✓" if wiz["api_key"] else "⚠️ No Key Set")),
+                                ("Storage", "~/.unjess/config.yaml"),
+                            ]
+                            for lbl, val in items:
+                                with ui.row().classes("w-full justify-between items-center"):
+                                    ui.label(lbl).classes("text-xs text-gray-400")
+                                    ui.label(val).classes("text-xs font-semibold text-white font-mono")
+
+                        # Quick tips
+                        with ui.column().classes("w-full gap-1.5 p-3 rounded-lg").style(
+                            "background: rgba(168, 85, 247, 0.05); border: 1px solid rgba(168, 85, 247, 0.15);"
+                        ):
+                            ui.label("💡 Quick Tips:").classes("text-xs font-semibold text-purple-300")
+                            ui.label("• Type / in the chat input to see slash commands (planning, models, provider switch).").classes(
+                                "text-[11px] text-gray-300"
+                            )
+                            ui.label("• Click the gear icon in the top bar anytime to add more API keys or change defaults.").classes(
+                                "text-[11px] text-gray-300"
+                            )
+
+                        # Launch button
+                        with ui.row().classes("w-full justify-between items-center pt-3 border-t border-gray-800"):
+                            def _back_step5() -> None:
+                                current_step_holder["step"] = 4
+                                _render_screen()
+
+                            def _finish_setup() -> None:
+                                if settings is not None:
+                                    _apply_wizard_settings(settings, wiz, router)
+                                ui.notify("Setup complete! Welcome to Unjess 🎉", type="positive", position="top")
+                                ui.navigate.to("/")
+
+                            ui.button("← Back", on_click=_back_step5).props("flat color=grey-4")
+                            ui.button(
+                                "🚀 Start Chatting",
+                                on_click=_finish_setup,
+                            ).props('unelevated color="deep-purple-6"').classes("px-8 font-bold text-sm")
+
+            # Initial screen render
+            _render_screen()
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _render_provider_card(card_info: dict[str, str], wiz: dict[str, str]) -> None:
-    """Render a single provider selection card.
-
-    Args:
-        card_info: Dict with ``value``, ``name``, ``desc``, ``icon``.
-        wiz: Mutable wizard state dict.
-    """
-    val = card_info["value"]
-    is_selected = wiz["provider"] == val
-
-    border_color = "rgba(124,58,237,0.6)" if is_selected else "rgba(255,255,255,0.06)"
-    bg = "rgba(124,58,237,0.08)" if is_selected else "rgba(255,255,255,0.02)"
-
-    card = ui.card().classes("w-full q-pa-sm q-mb-xs cursor-pointer").style(
-        f"background:{bg}; border:2px solid {border_color}; "
-        "border-radius:10px; transition:all 150ms ease"
-    )
-
-    def _select(v: str = val) -> None:
-        wiz["provider"] = v
-        # Visual update requires page re-render — NiceGUI handles this
-        # through the stepper's own state management.
-
-    card.on("click", lambda _, v=val: _select(v))
-
-    with card:
-        with ui.row().classes("items-center gap-sm no-wrap"):
-            ui.label(card_info["icon"]).style("font-size:22px")
-            with ui.column().style("gap:2px"):
-                ui.label(card_info["name"]).classes(
-                    "text-sm text-white text-weight-medium"
-                )
-                ui.label(card_info["desc"]).classes("text-xs text-grey-6")
-
-
-def _apply_wizard_settings(settings: "Settings", wiz: dict[str, str]) -> None:
+def _apply_wizard_settings(
+    settings: "Settings",
+    wiz: dict[str, str],
+    router: Any = None,
+) -> None:
     """Write wizard choices into Settings and persist to disk.
 
     Args:
         settings: The Settings instance to populate.
-        wiz: Wizard state dict with ``'provider'``, ``'api_key'``, ``'model'``.
+        wiz: Wizard state dict with ``'provider'``, ``'api_key'``, ``'model'``, ``'ollama_base_url'``.
+        router: Optional ProviderRouter instance to reload.
     """
     from unjess.config import save_config
 
     settings.provider = wiz["provider"]
     settings.model = wiz["model"]
 
-    if wiz["api_key"]:
+    if wiz["provider"] == "ollama" and wiz.get("ollama_base_url"):
+        settings.ollama_base_url = wiz["ollama_base_url"]
+
+    if wiz.get("api_key"):
         settings.api_keys[wiz["provider"]] = wiz["api_key"]
+        if wiz["provider"] == "ollama-api":
+            os.environ["OLLAMA_API_KEY"] = wiz["api_key"]
 
     save_config(settings)
+
+    if router and hasattr(router, "reload_providers"):
+        try:
+            router.reload_providers()
+        except Exception as exc:
+            logger.debug("Failed to reload router providers: %s", exc)
+
     logger.info(
         "Onboarding complete: provider=%s model=%s",
         wiz["provider"],

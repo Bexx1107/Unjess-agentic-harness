@@ -37,11 +37,43 @@ def main() -> None:
     if getattr(sys, 'frozen', False):
         os.environ['PYWEBVIEW_GUI'] = 'edgechromium'
         sys.stderr = open(LOG.parent / "stderr.log", "w", encoding="utf-8")
+        # Add host Python site-packages so the desktop app can import external libraries (playwright, etc.)
+        import glob
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        app_data = os.environ.get("APPDATA", "")
+        if local_app_data:
+            os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.join(local_app_data, "ms-playwright"))
+        candidates = []
+        if local_app_data:
+            candidates.extend(glob.glob(os.path.join(local_app_data, "Programs", "Python", "Python*", "Lib", "site-packages")))
+        if app_data:
+            candidates.extend(glob.glob(os.path.join(app_data, "Python", "Python*", "site-packages")))
+        for p in os.environ.get("PATH", "").split(os.pathsep):
+            if "python" in p.lower():
+                for sub in (os.path.join("Lib", "site-packages"), "site-packages"):
+                    sp = os.path.join(p, sub)
+                    if os.path.isdir(sp):
+                        candidates.append(sp)
+                    parent_sp = os.path.join(os.path.dirname(p), sub)
+                    if os.path.isdir(parent_sp):
+                        candidates.append(parent_sp)
+        for c in candidates:
+            if c not in sys.path and os.path.isdir(c):
+                sys.path.append(c)
 
     sys.argv = [sys.argv[0], "--gui", "--native"]
 
     try:
         _log("Step 1: importing unjess.cli...")
+        import asyncio
+        import nest_asyncio
+        nest_asyncio.apply()
+        _orig_asyncio_run = asyncio.run
+        def _safe_asyncio_run(main, *args, **kwargs):
+            kwargs.pop("loop_factory", None)
+            return _orig_asyncio_run(main, *args, **kwargs)
+        asyncio.run = _safe_asyncio_run
+
         from unjess.cli import main as cli_main
         _log("Step 2: calling cli_main()")
         cli_main()

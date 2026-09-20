@@ -69,8 +69,8 @@ class TestModelFlag:
         assert ns.model == "claude-sonnet-4-20250514"
 
     def test_model_with_equals(self) -> None:
-        ns = _parse(["--model=gemini-2.5-flash"])
-        assert ns.model == "gemini-2.5-flash"
+        ns = _parse(["--model=gemini-3.1-flash"])
+        assert ns.model == "gemini-3.1-flash"
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +228,7 @@ class TestCombinedFlags:
 
     def test_all_flags_combined(self) -> None:
         ns = _parse([
-            "-m", "gemini-2.5-flash",
+            "-m", "gemini-3.1-flash",
             "-p", "google",
             "-w", "/my/project",
             "--config", "/cfg.yaml",
@@ -236,7 +236,7 @@ class TestCombinedFlags:
             "--yes",
             "Run the tests",
         ])
-        assert ns.model == "gemini-2.5-flash"
+        assert ns.model == "gemini-3.1-flash"
         assert ns.provider == "google"
         assert ns.workspace == "/my/project"
         assert ns.config == "/cfg.yaml"

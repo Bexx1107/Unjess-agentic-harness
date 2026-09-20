@@ -35,15 +35,22 @@ class TestIsFirstRun:
     def test_no_config_file(self, tmp_path: Path) -> None:
         assert is_first_run(tmp_path / "nonexistent.yaml")
 
-    def test_empty_model_triggers_first_run(self, tmp_path: Path) -> None:
+    def test_empty_model_triggers_first_run(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unjess.config import _ENV_KEY_MAP
+        for env_var in _ENV_KEY_MAP:
+            monkeypatch.delenv(env_var, raising=False)
+
         config_path = tmp_path / "config.yaml"
         settings = Settings(model="")
         save_config(settings, config_path)
-        assert is_first_run(config_path)
+
+        with patch("unjess.config._load_saved_keys", return_value=({}, {})):
+            assert is_first_run(config_path)
 
     def test_configured_model_not_first_run(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.yaml"
         settings = Settings(model="gpt-4o")
+        settings.api_keys["openai"] = "some-key"
         save_config(settings, config_path)
         assert not is_first_run(config_path)
 
@@ -67,8 +74,10 @@ class TestProviderDisplay:
 
     def test_env_key_names_match_known_providers(self) -> None:
         key_providers = set(_ENV_KEY_NAMES.keys())
-        # These providers need API keys
-        expected = {"openai", "anthropic", "google", "groq", "mistral", "xai", "openrouter", "cerebras"}
+        expected = {
+            "openai", "anthropic", "google", "groq", "mistral",
+            "xai", "openrouter", "cerebras", "kimi", "qwen", "ollama", "ollama-api",
+        }
         assert key_providers == expected
 
     def test_env_key_format(self) -> None:
@@ -98,11 +107,11 @@ class TestModelSelection:
 
     def test_openai_has_reasoning_model(self) -> None:
         openai_models = [m[0] for m in _PROVIDER_MODELS["openai"]]
-        assert any("o4" in m or "o3" in m for m in openai_models)
+        assert any("o5" in m or "o4" in m or "o3" in m for m in openai_models)
 
     def test_google_has_flash(self) -> None:
         google_models = [m[0] for m in _PROVIDER_MODELS["google"]]
-        assert "gemini-2.5-flash" in google_models
+        assert "gemini-3.1-flash" in google_models
 
     def test_ollama_has_local_models(self) -> None:
         ollama_models = [m[0] for m in _PROVIDER_MODELS["ollama"]]
@@ -288,6 +297,6 @@ class TestRunFirstSetupIntegration:
         settings = Settings()
         result = run_first_setup(settings, console)
         assert result.free_mode_enabled is True
-        # google key available → should start with gemini-2.5-flash
-        assert result.model == "gemini-2.5-flash"
+        # google key available → should start with gemini-3.1-flash
+        assert result.model == "gemini-3.1-flash"
         assert result.provider == "google"

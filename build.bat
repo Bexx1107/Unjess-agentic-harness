@@ -25,13 +25,13 @@ pyinstaller ^
     --hidden-import "nest_asyncio" ^
     --hidden-import "webview" ^
     --collect-all "rich" ^
+    --collect-all "playwright" ^
     --exclude-module torch ^
     --exclude-module torchvision ^
     --exclude-module torchaudio ^
     --exclude-module onnxruntime ^
     --exclude-module cv2 ^
     --exclude-module opencv ^
-    --exclude-module playwright ^
     --exclude-module selenium ^
     --exclude-module polars ^
     --exclude-module pyarrow ^

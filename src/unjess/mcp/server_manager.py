@@ -49,15 +49,60 @@ class ServerManager:
         self,
         config_path: Optional[Path] = None,
         config_data: Optional[dict] = None,
+        workspace_dir: Optional[Path] = None,
     ) -> None:
         self._configs: dict[str, MCPServerConfig] = {}
         self._clients: dict[str, MCPClient] = {}
         self._all_tools: dict[str, MCPToolSchema] = {}  # keyed by prefixed name
+        self._workspace_dir = workspace_dir
 
         if config_data:
             self._load_from_dict(config_data)
         elif config_path and config_path.exists():
             self._load_config(config_path)
+
+    def _resolve_path(self, path_str: str) -> str:
+        """Resolve placeholders, relative paths, and incorrect paths against workspace."""
+        if not path_str:
+            return path_str
+
+        # 1. Determine workspace root
+        ws = self._workspace_dir
+        if not ws:
+            try:
+                from unjess.workspace import detect_project_root
+                ws = detect_project_root(Path.cwd())
+            except Exception:
+                ws = Path.cwd()
+
+        ws_str = str(ws.resolve())
+
+        # 2. Replace placeholders
+        resolved = path_str.replace("${workspaceRoot}", ws_str).replace("${workspace}", ws_str)
+
+        # 3. Handle relative paths
+        norm = resolved.replace("\\", "/")
+        if norm.startswith("./") or norm.startswith("../"):
+            try:
+                resolved = str((ws / resolved).resolve())
+            except Exception:
+                pass
+
+        # 4. Self-healing for absolute paths from other machines
+        try:
+            p = Path(resolved)
+            if not p.exists() and p.is_absolute():
+                parts = p.parts
+                if "mcp-servers" in parts:
+                    idx = parts.index("mcp-servers")
+                    subpath = Path(*parts[idx:])
+                    candidate = ws / subpath
+                    if candidate.exists():
+                        resolved = str(candidate.resolve())
+        except Exception:
+            pass
+
+        return resolved
 
     @property
     def server_names(self) -> list[str]:
@@ -149,11 +194,16 @@ class ServerManager:
         if server_name in self._clients and self._clients[server_name].is_initialized:
             return True  # already connected
 
+        # Resolve path variables and self-heal incorrect absolute paths
+        resolved_cmd = self._resolve_path(config.command)
+        resolved_args = [self._resolve_path(arg) for arg in config.args]
+        resolved_cwd = self._resolve_path(config.cwd) if config.cwd else None
+
         # Create transport and client
         transport = StdioTransport(
-            command=config.command,
-            args=config.args,
-            cwd=config.cwd,
+            command=resolved_cmd,
+            args=resolved_args,
+            cwd=resolved_cwd,
             env=config.env or None,
         )
 

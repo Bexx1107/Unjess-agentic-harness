@@ -54,7 +54,9 @@ def _render_subagents_section(state: "AppState") -> None:
     if state.subagent_manager is None:
         agents: list = []
     else:
-        agents = state.subagent_manager.list_all()
+        all_agents = state.subagent_manager.list_all()
+        conv_id = state.current_conversation_id
+        agents = [a for a in all_agents if getattr(a, "parent_conversation_id", "") == conv_id]
 
     _section_header("SUBAGENTS", len(agents))
 
@@ -162,8 +164,8 @@ def _render_artifact_content(full_path: str, ext: str) -> None:
         "box-sizing: border-box;"
     ):
         if ext == ".md":
-            # Render markdown
-            ui.markdown(content).classes("w-full text-sm").style(
+            # Render markdown with compact heading & text styles
+            ui.markdown(content).classes("w-full text-xs sidebar-artifact-preview").style(
                 "max-height: 400px; overflow-y: auto; overflow-x: auto; "
                 "padding: 8px; border-radius: 6px; "
                 "background: rgba(30, 30, 40, 0.6); "
@@ -263,7 +265,9 @@ def _render_tasks_section(state: "AppState") -> None:
     if state.task_manager is None:
         tasks: list = []
     else:
-        tasks = state.task_manager.list_tasks()
+        all_tasks = state.task_manager.list_tasks()
+        conv_id = state.current_conversation_id
+        tasks = [t for t in all_tasks if getattr(t, "parent_conversation_id", "") == conv_id]
 
     _section_header("BACKGROUND TASKS", len(tasks))
 
@@ -344,7 +348,15 @@ def _render_session_stats(state: "AppState") -> None:
         # Cost
         with ui.row().classes("items-center gap-2 w-full"):
             ui.icon("payments", size="14px").style("color: #e0e0e0")
-            if state.is_free:
+            if state.session_cost > 0:
+                ui.label(f"${state.session_cost:.4f}").style(
+                    "font-size: 0.75rem; color: #e0e0e0; font-family: monospace; font-weight: 600;"
+                )
+                if state.is_free:
+                    ui.label("(Free model active)").style(
+                        "font-size: 0.65rem; color: #4caf50;"
+                    )
+            elif state.is_free:
                 ui.label("FREE TIER").style(
                     "font-size: 0.75rem; color: #4caf50; font-weight: 600;"
                 )
@@ -353,10 +365,6 @@ def _render_session_stats(state: "AppState") -> None:
                     ui.label(f"{pct}% remaining").style(
                         "font-size: 0.65rem; color: #616161;"
                     )
-            elif state.session_cost > 0:
-                ui.label(f"${state.session_cost:.4f}").style(
-                    "font-size: 0.75rem; color: #e0e0e0; font-family: monospace; font-weight: 600;"
-                )
             else:
                 ui.label("$0.0000").style(
                     "font-size: 0.75rem; color: #616161; font-family: monospace;"

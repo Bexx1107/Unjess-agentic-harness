@@ -154,7 +154,7 @@ class TestFetchLiveModels:
 
     @patch("unjess.first_run._fetch_google_models")
     def test_google_delegation(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.return_value = [("gemini-2.5-flash", "Fast")]
+        mock_fetch.return_value = [("gemini-3.1-flash", "Fast")]
         result = _fetch_live_models("google", Settings())
         mock_fetch.assert_called_once()
 
@@ -214,17 +214,17 @@ class TestConstants:
     def test_provider_models_openai(self) -> None:
         models = _PROVIDER_MODELS["openai"]
         model_names = [m[0] for m in models]
-        assert "gpt-4o" in model_names
+        assert "gpt-5.4" in model_names
 
     def test_provider_models_google(self) -> None:
         models = _PROVIDER_MODELS["google"]
         model_names = [m[0] for m in models]
-        assert "gemini-2.5-flash" in model_names
+        assert "gemini-3.1-flash" in model_names
 
     def test_provider_models_ollama(self) -> None:
         models = _PROVIDER_MODELS["ollama"]
         model_names = [m[0] for m in models]
-        assert "llama3.1" in model_names
+        assert "llama3.5" in model_names
 
 
 # ---------------------------------------------------------------------------

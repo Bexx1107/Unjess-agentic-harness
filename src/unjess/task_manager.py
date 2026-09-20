@@ -32,6 +32,7 @@ class TaskInfo:
     error: str = ""
     _thread: Optional[threading.Thread] = field(default=None, repr=False)
     _kill_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    parent_conversation_id: str = ""
 
     @property
     def elapsed(self) -> float:
@@ -76,7 +77,8 @@ class TaskManager:
             Task ID.
         """
         tid = task_id or f"task-{uuid.uuid4().hex[:8]}"
-        info = TaskInfo(id=tid, name=name)
+        parent_id = getattr(self, "current_parent_id", "")
+        info = TaskInfo(id=tid, name=name, parent_conversation_id=parent_id)
         
         def runner() -> None:
             info.status = TaskStatus.RUNNING

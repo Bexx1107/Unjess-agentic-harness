@@ -42,3 +42,11 @@ keys.yaml
 .env.*
 *.pem
 *.key
+.session_secret
+
+# Training & Datasets (local chat transcripts/fine-tuning)
+colab_training/
+*.jsonl
+
+# Local MCP servers
+mcp-servers/

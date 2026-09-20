@@ -24,6 +24,7 @@ def build_system_prompt(
     workspace: Path | None = None,
     gui_mode: bool = False,
     skill_context: str = "",
+    user_profile_context: str = "",
 ) -> str:
     """Assemble the full system prompt from dynamic sections.
 
@@ -59,7 +60,7 @@ def build_system_prompt(
     sections.append(_build_identity(gui_mode=gui_mode))
 
     # 2. User information
-    sections.append(_build_user_info(settings))
+    sections.append(_build_user_info(settings, user_profile_context=user_profile_context))
 
     # 3. Available tools
     sections.append(_build_tools_section(tool_registry))
@@ -145,11 +146,17 @@ Slash commands the user can use:
 - /map — show codebase structure  |  /init — generate project context
 - /agents — manage subagents  |  /schedule — timers
 
+IMPORTANT — When to use tools vs. just talk:
+- For greetings (hi, hello, hey, etc.) — just respond with friendly text. Do NOT call any tools.
+- For simple questions — just answer in text. Do NOT call any tools.
+- For coding tasks — use the appropriate tools (read_file, write_file, run_command, etc.).
+- NEVER use ask_question just to greet the user or make casual conversation.
+
 You always prioritize the user's request. If a task is unclear, use the ask_question tool.
 </identity>"""
 
 
-def _build_user_info(settings: Settings) -> str:
+def _build_user_info(settings: Settings, user_profile_context: str = "") -> str:
     """Block 2: Dynamic user/environment info."""
     workspace = Path(settings.workspace).resolve()
     os_name = get_os_info()
@@ -157,17 +164,28 @@ def _build_user_info(settings: Settings) -> str:
     model = settings.model
     provider = getattr(settings, 'provider', 'unknown')
 
+    profile_block = f"\nUser Persona / Cross-Session Profile:\n{user_profile_context}\n" if user_profile_context else ""
+
+    os_specific_block = ""
+    if "windows" in os_name.lower():
+        os_specific_block = (
+            "\nWINDOWS POWERSHELL EXECUTION RULES:\n"
+            "- NEVER use bash syntax or variables like $HOME or ~ in commands or cwd. Use Windows paths.\n"
+            "- NEVER use 'cd' inside run_command. Pass the target directory using the 'cwd' parameter.\n"
+            "- Use native PowerShell cmdlets or cross-platform commands.\n"
+        )
+
     return f"""<user_information>
 Operating System: {os_name}
 Shell: {shell}
 Workspace: {workspace}
 Current Model: {model}
 Provider: {provider}
-
+{profile_block}
 You are running as model "{model}" via the "{provider}" provider.
 All file paths should be relative to the workspace root: {workspace}
 When running commands, use the appropriate shell syntax for {shell} on {os_name}.
-</user_information>"""
+{os_specific_block}</user_information>"""
 
 
 def _build_tools_section(registry: ToolRegistry) -> str:
@@ -211,6 +229,7 @@ def _build_guidelines() -> str:
     return """<guidelines>
 ## File editing
 - Always read files before editing them to understand the current state.
+- When using `edit_file`, use an exact unique code snippet for `target` from the file.
 - When editing files, preserve existing comments and code style.
 - After making changes, briefly explain what you did and why.
 - If a command might be destructive, warn the user.
@@ -233,11 +252,16 @@ When the user asks you to RESEARCH, AUDIT, ANALYZE, or REVIEW something:
 4. Do NOT dump a wall of text into the chat — put it in the file.
 
 ## Tool usage rules
+- NEVER use `cd` inside `run_command`. Specify the target directory using the `cwd` parameter instead.
+- NEVER use `run_command` with inline `python -c "..."` to read files, search text, or list directory contents. ALWAYS use dedicated native tools (`view_file`, `list_dir`, `grep_search`).
+- If a tool or command returns empty output or fails, NEVER panic, make up data, argue, or fabricate harness errors. Methodically inspect the state with `list_dir` or `view_file` and retry cleanly.
 - Do NOT automatically use browser tools unless the user explicitly asks to test or browse.
 - Do NOT automatically run servers, apps, or test suites. Tell the user the command and ask.
 - Do NOT take screenshots or navigate to localhost unless asked.
 - When you finish building something, summarize what you built and suggest how to test it.
-- Use the ask_question tool when you need the user to make a choice, not for trivial yes/no.
+- Use the ask_question tool ONLY when you need the user to make a multi-choice decision.
+- NEVER use ask_question for greetings, casual conversation, or open-ended questions.
+- If you want to say "How can I help?" — just output that as text, do NOT call ask_question.
 
 ## General
 - Keep responses focused and concise.

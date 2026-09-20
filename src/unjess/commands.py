@@ -327,7 +327,26 @@ def _cmd_compact(ctx: CommandContext, args: str) -> bool:
         return True
 
     old_count = ctx.agent.conversation_length
-    ctx.agent.conversation = ctx.context_manager.compact(ctx.agent.conversation)
+
+    def _summarize_fn(text: str) -> str:
+        if not ctx.router:
+            return "Conversation history summarized."
+        try:
+            resp = ctx.router.complete(
+                messages=[
+                    {"role": "system", "content": "You are a concise conversation summarizer. Summarize the key context, facts, decisions, and user requirements from the conversation history into bullet points."},
+                    {"role": "user", "content": f"Summarize this conversation:\n\n{text[:8000]}"}
+                ],
+                model=ctx.settings.model,
+            )
+            return resp.content or "Conversation history summarized."
+        except Exception:
+            return "Conversation history summarized."
+
+    ctx.agent.conversation = ctx.context_manager.compact(
+        ctx.agent.conversation,
+        summarize_fn=_summarize_fn
+    )
     new_count = ctx.agent.conversation_length
 
     ctx.display.show_info(
@@ -560,7 +579,7 @@ def _cmd_learn(ctx: CommandContext, args: str) -> bool:
 
 
 def _cmd_schedule(ctx: CommandContext, args: str) -> bool:
-    """Set a one-shot timer or recurring schedule."""
+    """Set a non-blocking one-shot timer or recurring cron schedule."""
     from unjess.scheduler import Scheduler
 
     if not args.strip():
@@ -571,25 +590,44 @@ def _cmd_schedule(ctx: CommandContext, args: str) -> bool:
         )
         return True
 
-    parts = args.strip().split(maxsplit=1)
+    # Get or create scheduler (store on context)
+    if not hasattr(ctx, '_scheduler') or ctx._scheduler is None:  # type: ignore[attr-defined]
+        ctx._scheduler = Scheduler()  # type: ignore[attr-defined]
 
-    # Check if first arg is a number (timer) or cron expression
+    scheduler: Scheduler = ctx._scheduler  # type: ignore[attr-defined]
+
+    parts = args.strip().split(maxsplit=1)
+    if not parts:
+        return True
+
+    # One-shot timer: /schedule 60 Check build
     if parts[0].isdigit():
         seconds = int(parts[0])
         prompt = parts[1] if len(parts) > 1 else "Timer fired"
+        task_id = scheduler.schedule_timer(seconds, prompt)
+        mins = seconds / 60
+        time_str = f"{mins:.1f}m" if mins >= 1 else f"{seconds}s"
+        ctx.display.show_info(f"⏰ Timer set: {time_str} ({task_id}) — '{prompt}'")
+        return True
 
-        # Get or create scheduler (store on context)
-        if not hasattr(ctx, '_scheduler'):
-            ctx._scheduler = Scheduler()  # type: ignore[attr-defined]
+    # Cron schedule: /schedule */5 * * * * Run tests  OR  0 */6 * * * Check issues
+    raw_tokens = args.strip().split()
+    if len(raw_tokens) >= 6:
+        cron_expr = " ".join(raw_tokens[:5])
+        prompt = " ".join(raw_tokens[5:])
+        try:
+            task_id = scheduler.schedule_cron(cron_expr, prompt)
+            ctx.display.show_info(f"⏰ Cron scheduled: '{cron_expr}' ({task_id}) — '{prompt}'")
+        except ValueError as exc:
+            ctx.display.show_error(f"Invalid cron expression '{cron_expr}': {exc}")
+        return True
 
-        task_id = ctx._scheduler.schedule_timer(seconds, prompt)  # type: ignore[attr-defined]
-        ctx.display.show_info(f"Timer set: {seconds}s ({task_id})")
-    else:
-        ctx.display.show_info(
-            "Cron scheduling is available via the Scheduler API. "
-            "For CLI use, try: /schedule <seconds> <message>"
-        )
-
+    ctx.display.show_info(
+        "Usage:\n"
+        "  /schedule <seconds> <prompt>\n"
+        "  /schedule <min> <hour> <day> <month> <weekday> <prompt>\n"
+        "Example: /schedule 60 Timer test"
+    )
     return True
 
 
@@ -805,11 +843,12 @@ def _cmd_mcp(ctx: CommandContext, args: str) -> bool:
     if not hasattr(ctx, '_mcp_manager'):
         mcp_json = Path.home() / ".unjess" / "mcp.json"
         config_yaml = Path.home() / ".unjess" / "config.yaml"
+        workspace_path = Path(ctx.settings.workspace) if ctx.settings.workspace else None
 
         if mcp_json.exists():
-            ctx._mcp_manager = ServerManager(config_path=mcp_json)  # type: ignore[attr-defined]
+            ctx._mcp_manager = ServerManager(config_path=mcp_json, workspace_dir=workspace_path)  # type: ignore[attr-defined]
         else:
-            ctx._mcp_manager = ServerManager(config_path=config_yaml)  # type: ignore[attr-defined]
+            ctx._mcp_manager = ServerManager(config_path=config_yaml, workspace_dir=workspace_path)  # type: ignore[attr-defined]
 
     mgr: ServerManager = ctx._mcp_manager  # type: ignore[attr-defined]
 
@@ -967,7 +1006,7 @@ def _cmd_provider(ctx: CommandContext, args: str) -> bool:
 
     # --- Show provider picker ---
     provider_info = {
-        "google": ("Google Gemini", "gemini-2.5-flash"),
+        "google": ("Google Gemini", "gemini-3.1-flash"),
         "groq": ("Groq", "llama-3.3-70b-versatile"),
         "mistral": ("Mistral", "codestral-latest"),
         "openrouter": ("OpenRouter", "openrouter/free"),
@@ -975,7 +1014,8 @@ def _cmd_provider(ctx: CommandContext, args: str) -> bool:
         "xai": ("xAI (Grok)", "grok-4.1-fast"),
         "openai": ("OpenAI", "gpt-4o"),
         "anthropic": ("Anthropic", "claude-sonnet-4"),
-        "ollama": ("Ollama", ""),
+        "ollama": ("Ollama", "llama3.1"),
+        "ollama-api": ("Ollama API", "llama3.3"),
     }
 
     table = Table(
@@ -1038,7 +1078,7 @@ def _do_provider_switch(ctx: "CommandContext", target: str, current: str) -> boo
 
     models = ctx.router.list_models(target)
     default_models = {
-        "google": "gemini-2.5-flash",
+        "google": "gemini-3.1-flash",
         "groq": "llama-3.3-70b-versatile",
         "mistral": "codestral-latest",
         "openrouter": "openrouter/free",

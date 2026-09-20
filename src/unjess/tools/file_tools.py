@@ -7,6 +7,7 @@ permission prompt so the user can approve on a case-by-case basis.
 import difflib
 import fnmatch
 import os
+import unicodedata
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -59,6 +60,48 @@ def get_current_workspace() -> Path:
     return ws
 
 
+def _fuzzy_resolve_path(candidate: Path) -> Path:
+    """Fuzzily resolve candidate path if exact file path does not exist.
+
+    Handles Unicode punctuation mismatches (e.g. '…' vs '.'), quote variations,
+    and slight string variations using difflib.
+    """
+    if candidate.exists():
+        return candidate
+    parent = candidate.parent
+    if not parent.exists() or not parent.is_dir():
+        return candidate
+
+    target_name = candidate.name
+    # 1. Try normalized Unicode matching ('…' -> '.', etc.)
+    norm_target = (
+        unicodedata.normalize("NFKD", target_name)
+        .replace("…", ".")
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    try:
+        for child in parent.iterdir():
+            child_norm = (
+                unicodedata.normalize("NFKD", child.name)
+                .replace("…", ".")
+                .replace("–", "-")
+                .replace("—", "-")
+            )
+            if child_norm.lower() == norm_target.lower():
+                return child
+
+        # 2. Try close fuzzy matching
+        children = {c.name: c for c in parent.iterdir()}
+        matches = difflib.get_close_matches(target_name, children.keys(), n=1, cutoff=0.85)
+        if matches:
+            return children[matches[0]]
+    except Exception:
+        pass
+
+    return candidate
+
+
 def _resolve_safe(path_str: str, workspace: Path, operation: str = "access") -> Path:
     """Resolve a path, asking permission if it's outside the workspace.
 
@@ -78,6 +121,8 @@ def _resolve_safe(path_str: str, workspace: Path, operation: str = "access") -> 
     candidate = Path(path_str)
     if not candidate.is_absolute():
         candidate = workspace / candidate
+
+    candidate = _fuzzy_resolve_path(candidate)
 
     resolved = candidate.resolve()
     ws_resolved = workspace.resolve()
@@ -222,7 +267,10 @@ def _edit_file(
     target: str,
     replacement: str,
 ) -> str:
-    """Edit a file by replacing an exact string match.
+    """Edit a file by replacing a target string match.
+
+    Supports exact substring matching, newline-normalized matching (\\r\\n vs \\n),
+    and whitespace-trimmed line block matching for resilience with local models.
 
     Args:
         path: File path.
@@ -242,24 +290,74 @@ def _edit_file(
     except Exception as exc:
         return f"Error reading file: {exc}"
 
-    if target not in old_content:
-        # Try to be helpful — show a snippet of the file
+    new_content: Optional[str] = None
+
+    # Strategy 1: Direct exact substring match
+    if target in old_content:
+        count = old_content.count(target)
+        if count > 1:
+            return (
+                f"Error: Target string found {count} times in {path}. "
+                f"Please provide a more specific target that matches exactly once."
+            )
+        new_content = old_content.replace(target, replacement, 1)
+
+    # Strategy 2: Newline-normalized match (\r\n / \r\r\n / \r vs \n)
+    if new_content is None:
+        norm_target = target.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+        norm_old = old_content.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+        if norm_target in norm_old:
+            count = norm_old.count(norm_target)
+            if count == 1:
+                norm_rep = replacement.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+                norm_new = norm_old.replace(norm_target, norm_rep, 1)
+                new_content = norm_new.replace("\n", "\r\n") if "\r\n" in old_content else norm_new
+            elif count > 1:
+                return (
+                    f"Error: Target string found {count} times in {path}. "
+                    f"Please provide a more specific target that matches exactly once."
+                )
+
+    # Strategy 3: Whitespace-tolerant line block match
+    if new_content is None:
+        norm_target = target.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+        norm_old = old_content.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+        target_lines = [l.strip() for l in norm_target.splitlines() if l.strip()]
+        old_lines = norm_old.splitlines()
+
+        non_empty_indices = [idx for idx, line in enumerate(old_lines) if line.strip()]
+        non_empty_lines = [old_lines[idx].strip() for idx in non_empty_indices]
+
+        if target_lines and len(non_empty_lines) >= len(target_lines):
+            matches: list[tuple[int, int]] = []
+            t_len = len(target_lines)
+            for i in range(len(non_empty_lines) - t_len + 1):
+                if non_empty_lines[i : i + t_len] == target_lines:
+                    start_old_idx = non_empty_indices[i]
+                    end_old_idx = non_empty_indices[i + t_len - 1] + 1
+                    matches.append((start_old_idx, end_old_idx))
+
+            if len(matches) == 1:
+                start_i, end_i = matches[0]
+                rep_lines = replacement.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n").splitlines()
+                replaced_lines = old_lines[:start_i] + rep_lines + old_lines[end_i:]
+                norm_new = "\n".join(replaced_lines)
+                if norm_old.endswith("\n"):
+                    norm_new += "\n"
+                new_content = norm_new.replace("\n", "\r\n") if "\r\n" in old_content else norm_new
+            elif len(matches) > 1:
+                return (
+                    f"Error: Target string matched {len(matches)} locations in {path} with fuzzy matching. "
+                    f"Please provide a more specific target that matches exactly once."
+                )
+
+    if new_content is None:
         lines = old_content.splitlines()
         preview = "\n".join(lines[:20])
         return (
             f"Error: Target string not found in {path}.\n"
             f"File starts with:\n{preview}"
         )
-
-    # Count occurrences
-    count = old_content.count(target)
-    if count > 1:
-        return (
-            f"Error: Target string found {count} times in {path}. "
-            f"Please provide a more specific target that matches exactly once."
-        )
-
-    new_content = old_content.replace(target, replacement, 1)
 
     try:
         resolved.write_text(new_content, encoding="utf-8")
@@ -329,12 +427,13 @@ def _list_dir(workspace: Path, path: str = ".") -> str:
             rel = Path(item.name)
 
         if item.is_dir():
-            # Count children (non-recursive, fast)
+            # Fast empty check instead of counting all children
             try:
-                child_count = sum(1 for _ in item.iterdir())
-            except PermissionError:
-                child_count = -1
-            entries.append(f"  📁 {rel}/ ({child_count} items)")
+                is_empty = not any(item.iterdir())
+                suffix = " (empty)" if is_empty else ""
+            except (PermissionError, OSError):
+                suffix = " (access denied)"
+            entries.append(f"  📁 {rel}/{suffix}")
         else:
             try:
                 size = item.stat().st_size

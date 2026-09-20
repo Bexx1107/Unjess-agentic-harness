@@ -1,6 +1,7 @@
 """Provider router — auto-detect provider from model name, manage fallback chain."""
 
 import logging
+import os
 from typing import Any, Generator
 
 from unjess.config import Settings
@@ -45,10 +46,20 @@ def _detect_provider(model: str) -> str:
         return "mistral"
     if m.startswith("grok-"):
         return "xai"
+    if m.startswith(("kimi-", "moonshot-")):
+        return "kimi"
+    if m.startswith(("qwen-", "qwen2", "qwen3")):
+        return "qwen"
     if m.startswith("openrouter/") or ":free" in m:
         return "openrouter"
     if m.startswith("glm-") or m.startswith("zai-"):
         return "cerebras"
+    if m.startswith("llamacpp") or m == "llamacpp":
+        return "llamacpp"
+    if m.startswith("ollama-api/"):
+        return "ollama-api"
+    if m.startswith("ollama/"):
+        return "ollama"
     if ":" in m:
         return "ollama"
 
@@ -145,16 +156,86 @@ class ProviderRouter:
                 name="cerebras",
             )
 
-        # Ollama (always available — no key needed)
+        # Kimi / Moonshot AI (OpenAI-compatible)
+        if keys.get("kimi") or keys.get("moonshot"):
+            self._providers["kimi"] = OpenAICompatibleProvider(
+                api_key=keys.get("kimi") or keys.get("moonshot", ""),
+                base_url=getattr(self._settings, "kimi_base_url", "https://api.moonshot.ai/v1"),
+                default_model="kimi-k3",
+                name="kimi",
+            )
+
+        # Qwen / DashScope (OpenAI-compatible)
+        if keys.get("qwen") or keys.get("dashscope"):
+            self._providers["qwen"] = OpenAICompatibleProvider(
+                api_key=keys.get("qwen") or keys.get("dashscope", ""),
+                base_url=getattr(self._settings, "qwen_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+                default_model="qwen-max",
+                name="qwen",
+            )
+
+        # Ollama (Local — runs locally without API key)
         try:
+            ollama_url = getattr(self._settings, "ollama_base_url", "http://localhost:11434").rstrip("/")
+            if not ollama_url.endswith("/v1"):
+                ollama_url = f"{ollama_url}/v1"
             self._providers["ollama"] = OpenAICompatibleProvider(
                 api_key="ollama",
-                base_url=f"{self._settings.ollama_base_url}/v1",
-                default_model="qwen2.5:14b",
+                base_url=ollama_url,
+                default_model="llama3.1",
                 name="ollama",
+                timeout=300.0,
             )
         except Exception:
-            pass  # Ollama not available — skip silently
+            pass  # Ollama local not available — skip silently
+
+        # Ollama API (Cloud — requires Ollama API key / subscription)
+        ollama_api_key = (
+            keys.get("ollama-api")
+            or keys.get("ollama")
+            or os.environ.get("OLLAMA_API_KEY", "")
+        )
+        if ollama_api_key and ollama_api_key != "ollama":
+            try:
+                ollama_api_url = getattr(self._settings, "ollama_api_base_url", "https://api.ollama.com").rstrip("/")
+                if not ollama_api_url.endswith("/v1"):
+                    ollama_api_url = f"{ollama_api_url}/v1"
+                self._providers["ollama-api"] = OpenAICompatibleProvider(
+                    api_key=ollama_api_key,
+                    base_url=ollama_api_url,
+                    default_model="llama3.3",
+                    name="ollama-api",
+                    timeout=300.0,
+                )
+            except Exception:
+                pass  # Ollama API not available — skip silently
+
+        # llama.cpp (always available — no key needed)
+        try:
+            self._providers["llamacpp"] = OpenAICompatibleProvider(
+                api_key="llamacpp",
+                base_url=f"{self._settings.llamacpp_base_url}/v1",
+                default_model="llamacpp",
+                name="llamacpp",
+                timeout=300.0,
+            )
+        except Exception:
+            pass  # llama.cpp not available — skip silently
+
+        # LM Studio (always available — no key needed, defaults to http://localhost:1234)
+        try:
+            lm_url = getattr(self._settings, "lmstudio_base_url", "http://localhost:1234").rstrip("/")
+            if not lm_url.endswith("/v1"):
+                lm_url = f"{lm_url}/v1"
+            self._providers["lmstudio"] = OpenAICompatibleProvider(
+                api_key="lmstudio",
+                base_url=lm_url,
+                default_model="local-model",
+                name="lmstudio",
+                timeout=300.0,
+            )
+        except Exception:
+            pass  # LM Studio not available — skip silently
 
     def get_provider(
         self,
@@ -180,6 +261,15 @@ class ProviderRouter:
             return self._providers[provider_name], model
 
         # Provider not available — try to explain why
+        if provider_name == "ollama":
+            raise ValueError(
+                f"Provider 'ollama' is not available. Ensure Ollama is running at {self._settings.ollama_base_url}."
+            )
+        if provider_name == "ollama-api":
+            raise ValueError(
+                "Provider 'ollama-api' requires an API key. Set OLLAMA_API_KEY or configure it in Settings."
+            )
+
         env_vars = {
             "openai": "OPENAI_API_KEY",
             "anthropic": "ANTHROPIC_API_KEY",
@@ -189,6 +279,9 @@ class ProviderRouter:
             "xai": "XAI_API_KEY",
             "openrouter": "OPENROUTER_API_KEY",
             "cerebras": "CEREBRAS_API_KEY",
+            "kimi": "MOONSHOT_API_KEY",
+            "qwen": "DASHSCOPE_API_KEY",
+            "ollama-api": "OLLAMA_API_KEY",
         }
         if provider_name in env_vars:
             env_var = env_vars[provider_name]
@@ -397,6 +490,28 @@ class ProviderRouter:
                 default_model="zai-glm-4.7",
                 name="cerebras",
             )
+        elif provider == "ollama":
+            ollama_url = getattr(self._settings, "ollama_base_url", "http://localhost:11434").rstrip("/")
+            if not ollama_url.endswith("/v1"):
+                ollama_url = f"{ollama_url}/v1"
+            self._providers["ollama"] = OpenAICompatibleProvider(
+                api_key=api_key or "ollama",
+                base_url=ollama_url,
+                default_model="llama3.1",
+                name="ollama",
+                timeout=300.0,
+            )
+        elif provider == "ollama-api":
+            ollama_api_url = getattr(self._settings, "ollama_api_base_url", "https://api.ollama.com").rstrip("/")
+            if not ollama_api_url.endswith("/v1"):
+                ollama_api_url = f"{ollama_api_url}/v1"
+            self._providers["ollama-api"] = OpenAICompatibleProvider(
+                api_key=api_key,
+                base_url=ollama_api_url,
+                default_model="llama3.3",
+                name="ollama-api",
+                timeout=300.0,
+            )
         else:
             # Unknown provider — full reload
             self.reload_providers()
@@ -410,9 +525,10 @@ class ProviderRouter:
             "cerebras": "zai-glm-4.7",
             "groq": "llama-3.3-70b-versatile",
             "mistral": "codestral-latest",
-            "google": "gemini-2.5-flash",
-            "openrouter": "google/gemini-2.5-flash:free",
+            "google": "gemini-3.1-flash",
+            "openrouter": "google/gemini-3.1-flash:free",
             "ollama": "qwen3.5:9b",
+            "ollama-api": "llama3.3",
         }
         chain: list[str] = []
         for prov_name in self._providers:

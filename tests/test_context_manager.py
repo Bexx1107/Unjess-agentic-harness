@@ -48,14 +48,14 @@ class TestCountTokens:
     def test_heuristic_fallback_basic(self) -> None:
         # Non-OpenAI model → chars / 4
         text = "a" * 100
-        assert count_tokens(text, model="gemini-2.5-flash") == 25
+        assert count_tokens(text, model="gemini-3.1-flash") == 25
 
     def test_heuristic_minimum_one(self) -> None:
-        assert count_tokens("ab", model="gemini-2.5-flash") == 1
+        assert count_tokens("ab", model="gemini-3.1-flash") == 1
 
     def test_heuristic_empty_string(self) -> None:
         # len("") // 4 == 0, max(1, 0) => 1
-        assert count_tokens("", model="gemini-2.5-flash") == 1
+        assert count_tokens("", model="gemini-3.1-flash") == 1
 
     def test_heuristic_no_model(self) -> None:
         assert count_tokens("a" * 80) == 20
@@ -97,22 +97,22 @@ class TestCountMessagesTokens:
     """Token counting across a list of messages."""
 
     def test_empty_messages(self) -> None:
-        assert count_messages_tokens([], model="gemini-2.5-flash") == 0
+        assert count_messages_tokens([], model="gemini-3.1-flash") == 0
 
     def test_single_message(self) -> None:
         msgs = [_msg("user", "a" * 80)]
         # content tokens: 80//4=20, overhead: 4 => 24
-        assert count_messages_tokens(msgs, model="gemini-2.5-flash") == 24
+        assert count_messages_tokens(msgs, model="gemini-3.1-flash") == 24
 
     def test_multiple_messages(self) -> None:
         msgs = [_msg("user", "a" * 80), _msg("assistant", "b" * 40)]
         # user: 20 + 4 = 24; assistant: 10 + 4 = 14 => 38
-        assert count_messages_tokens(msgs, model="gemini-2.5-flash") == 38
+        assert count_messages_tokens(msgs, model="gemini-3.1-flash") == 38
 
     def test_message_with_tool_calls(self) -> None:
         tc = {"id": "call_1", "function": {"name": "read_file", "arguments": "{}"}}
         msgs = [_msg("assistant", "", tool_calls=[tc])]
-        result = count_messages_tokens(msgs, model="gemini-2.5-flash")
+        result = count_messages_tokens(msgs, model="gemini-3.1-flash")
         expected_content = 1  # empty string => max(1, 0)
         expected_tc = max(1, len(json.dumps(tc)) // 4)
         expected = expected_content + expected_tc + 4
@@ -121,12 +121,12 @@ class TestCountMessagesTokens:
     def test_missing_content_key(self) -> None:
         msgs = [{"role": "user"}]
         # content defaults to "" → 1 token + 4 overhead
-        assert count_messages_tokens(msgs, model="gemini-2.5-flash") == 5
+        assert count_messages_tokens(msgs, model="gemini-3.1-flash") == 5
 
     def test_non_string_content_ignored(self) -> None:
         # list content (multimodal) → not isinstance str → skipped, 0 content tokens
         msgs = [{"role": "user", "content": [{"type": "image"}]}]
-        result = count_messages_tokens(msgs, model="gemini-2.5-flash")
+        result = count_messages_tokens(msgs, model="gemini-3.1-flash")
         assert result == 4  # only overhead
 
 
@@ -163,8 +163,8 @@ class TestGetContextWindow:
         assert cm.get_context_window() == 128_000
 
     def test_exact_match_gemini(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
-        assert cm.get_context_window() == 1_000_000
+        cm = ContextManager(model="gemini-3.1-flash")
+        assert cm.get_context_window() == 2_000_000
 
     def test_exact_match_mixtral(self) -> None:
         cm = ContextManager(model="mixtral-8x7b")
@@ -242,7 +242,7 @@ class TestTruncateConversation:
     """Truncation preserves first message + most recent, drops middle."""
 
     def test_no_truncation_needed(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")  # 1M window
+        cm = ContextManager(model="gemini-3.1-flash")  # 1M window
         msgs = [_msg("user", "hello"), _msg("assistant", "hi")]
         result = cm.truncate_conversation(msgs, "system")
         assert result is msgs  # exact same list when no truncation
@@ -314,7 +314,7 @@ class TestCompact:
         assert result is msgs
 
     def test_compact_without_summarize_fn(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         msgs = _make_messages(10, chars_per=40)
         result = cm.compact(msgs, keep_recent=4)
         assert len(result) < len(msgs)
@@ -322,7 +322,7 @@ class TestCompact:
         assert "[Conversation summary" in result[0]["content"]
 
     def test_compact_with_summarize_fn(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         msgs = _make_messages(10, chars_per=40)
         summary_fn = MagicMock(return_value="Summary of old stuff")
         result = cm.compact(msgs, summarize_fn=summary_fn, keep_recent=4)
@@ -330,7 +330,7 @@ class TestCompact:
         assert "Summary of old stuff" in result[0]["content"]
 
     def test_compact_summarize_fn_failure_falls_back(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         msgs = _make_messages(10, chars_per=40)
         summary_fn = MagicMock(side_effect=RuntimeError("LLM down"))
         result = cm.compact(msgs, summarize_fn=summary_fn, keep_recent=4)
@@ -339,7 +339,7 @@ class TestCompact:
         assert "..." in result[0]["content"]
 
     def test_compact_preserves_recent_messages(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         msgs = _make_messages(10, chars_per=40)
         keep = 4
         result = cm.compact(msgs, keep_recent=keep)
@@ -348,7 +348,7 @@ class TestCompact:
             assert orig["content"] == compacted["content"]
 
     def test_compact_keeps_recent_exact(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         # 6 user messages: all user role (no tool_calls confusion)
         msgs = [_msg("user", f"msg{i}") for i in range(6)]
         result = cm.compact(msgs, keep_recent=4)
@@ -358,7 +358,7 @@ class TestCompact:
         assert result[-4]["content"] == "msg2"
 
     def test_compact_avoids_breaking_tool_call_group(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         tc = [{"id": "tc_1", "function": {"name": "f", "arguments": "{}"}}]
         msgs = [
             _msg("user", "do something"),
@@ -378,7 +378,7 @@ class TestCompact:
                 assert result[i + 1].get("role") == "tool"
 
     def test_compact_split_too_early_returns_original(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         # Only tool-call groups — can't find a safe split
         tc = [{"id": "tc_1", "function": {"name": "f", "arguments": "{}"}}]
         msgs = [
@@ -400,7 +400,7 @@ class TestGetContextBreakdown:
     """Context breakdown returns correct token accounting."""
 
     def test_breakdown_keys(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         breakdown = cm.get_context_breakdown("sys", [_msg("user", "hi")])
         expected_keys = {
             "context_window", "response_reserve", "system_prompt_tokens",
@@ -410,18 +410,18 @@ class TestGetContextBreakdown:
         assert set(breakdown.keys()) == expected_keys
 
     def test_breakdown_message_count(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         msgs = _make_messages(3)
         breakdown = cm.get_context_breakdown("sys", msgs)
         assert breakdown["message_count"] == 6
 
     def test_breakdown_total_used(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         breakdown = cm.get_context_breakdown("system", [_msg("user", "hello")])
         assert breakdown["total_used"] == breakdown["system_prompt_tokens"] + breakdown["conversation_tokens"]
 
     def test_breakdown_utilization_pct(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         breakdown = cm.get_context_breakdown("sys", [])
         assert 0 <= breakdown["utilization_pct"] <= 100
 
@@ -434,7 +434,7 @@ class TestNeedsCompaction:
     """Compaction trigger based on utilization or hard token cap."""
 
     def test_below_threshold(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")
+        cm = ContextManager(model="gemini-3.1-flash")
         assert cm.needs_compaction("sys", []) is False
 
     def test_above_threshold(self) -> None:
@@ -449,12 +449,12 @@ class TestNeedsCompaction:
         assert cm.needs_compaction("system prompt", [_msg("user", "hello world")], threshold=0.0) is True
 
     def test_hard_cap_triggers_compaction(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash", max_conversation_tokens=10)
+        cm = ContextManager(model="gemini-3.1-flash", max_conversation_tokens=10)
         msgs = [_msg("user", "a" * 200)]  # way more than 10 tokens
         assert cm.needs_compaction("sys", msgs) is True
 
     def test_hard_cap_not_triggered(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash", max_conversation_tokens=1_000_000)
+        cm = ContextManager(model="gemini-3.1-flash", max_conversation_tokens=1_000_000)
         msgs = [_msg("user", "hello")]
         assert cm.needs_compaction("sys", msgs) is False
 
@@ -482,7 +482,7 @@ class TestContextModes:
             cm.set_mode("turbo")
 
     def test_effective_mode_full_for_large_model(self) -> None:
-        cm = ContextManager(model="gemini-2.5-flash")  # 1M >= 200K
+        cm = ContextManager(model="gemini-3.1-flash")  # 1M >= 200K
         assert cm.get_effective_mode() == "full"
 
     def test_effective_mode_full_for_200k_model(self) -> None:
@@ -517,10 +517,10 @@ class TestContextSection:
 
     def test_token_count_cached(self) -> None:
         s = ContextSection(name="test", content="a" * 80)
-        first = s.token_count(model="gemini-2.5-flash")
+        first = s.token_count(model="gemini-3.1-flash")
         assert first == 20
         # Second call should return the same cached value
-        assert s.token_count(model="gemini-2.5-flash") == 20
+        assert s.token_count(model="gemini-3.1-flash") == 20
 
     def test_required_section(self) -> None:
         s = ContextSection(name="identity", content="I am njss", priority=10, required=True)
@@ -574,7 +574,7 @@ class TestAssembleSections:
     def test_adaptive_mode_respects_budget(self) -> None:
         sections = self._make_sections()
         # Very small budget — should include required sections but skip large ones
-        result = assemble_sections(sections, token_budget=20, model="gemini-2.5-flash", mode="adaptive")
+        result = assemble_sections(sections, token_budget=20, model="gemini-3.1-flash", mode="adaptive")
         # Required sections are always included
         required_names = {s.name for s in result if s.required}
         assert "identity" in required_names
@@ -582,7 +582,7 @@ class TestAssembleSections:
 
     def test_adaptive_mode_large_budget_includes_more(self) -> None:
         sections = self._make_sections()
-        result = assemble_sections(sections, token_budget=100_000, model="gemini-2.5-flash", mode="adaptive")
+        result = assemble_sections(sections, token_budget=100_000, model="gemini-3.1-flash", mode="adaptive")
         assert len(result) == len(sections)
 
 

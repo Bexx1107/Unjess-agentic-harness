@@ -160,7 +160,7 @@ class GoogleProvider(LLMProvider):
     def __init__(
         self,
         api_key: str,
-        default_model: str = "gemini-2.5-flash",
+        default_model: str = "gemini-3.1-flash",
     ) -> None:
         self._client = genai.Client(api_key=api_key)
         self._default_model = default_model
@@ -174,7 +174,7 @@ class GoogleProvider(LLMProvider):
         """List available Gemini models.
 
         Returns:
-            Sorted list of model names (e.g. 'gemini-2.5-flash').
+            Sorted list of model names (e.g. 'gemini-3.1-flash').
         """
         try:
             models = self._client.models.list()

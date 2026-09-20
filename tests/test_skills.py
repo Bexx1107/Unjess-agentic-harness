@@ -109,6 +109,12 @@ class TestParseYamlFrontmatter:
         meta, body = _parse_yaml_frontmatter(text)
         assert meta["desc"] == "this: has: colons"
 
+    def test_yaml_list_triggers(self) -> None:
+        text = "---\nname: test\ntriggers:\n  - thumbnail\n  - concept\n---\nBody"
+        meta, body = _parse_yaml_frontmatter(text)
+        assert meta["name"] == "test"
+        assert meta["triggers"] == ["thumbnail", "concept"]
+
 
 # ---------------------------------------------------------------------------
 # SkillEngine — discovery

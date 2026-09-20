@@ -36,8 +36,8 @@ _COST_RATES: dict[str, tuple[float, float]] = {
     "claude-3.5-sonnet": (3.00, 15.00),
     "claude-3.5-haiku": (0.80, 4.00),
     # Google
-    "gemini-2.5-flash": (0.15, 0.60),
-    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-3.1-flash": (0.15, 0.60),
+    "gemini-3.1-pro": (1.25, 10.00),
     "gemini-2.0-flash": (0.10, 0.40),
     "gemini-3.5-flash": (1.50, 9.00),
     "gemini-3-flash": (0.50, 3.00),
@@ -65,6 +65,16 @@ _COST_RATES: dict[str, tuple[float, float]] = {
     "qwen/qwen3-coder:free": (0.0, 0.0),
     # Cerebras (free tier)
     "zai-glm-4.7": (0.0, 0.0),
+    # Kimi / Moonshot AI
+    "kimi": (0.50, 2.00),
+    "moonshot": (0.50, 2.00),
+    # Qwen / DashScope
+    "qwen-max": (0.40, 1.20),
+    "qwen-plus": (0.11, 0.33),
+    "qwen-turbo": (0.04, 0.12),
+    "qwen2.5": (0.10, 0.20),
+    "qwen3": (0.10, 0.20),
+    "qwen": (0.20, 0.50),
     # Ollama (always free — local)
     "llama3": (0.0, 0.0),
     "qwen2.5": (0.0, 0.0),
@@ -82,7 +92,7 @@ _FREE_PREFIXES: list[str] = [
 ]
 
 # Providers known to always be free
-_FREE_PROVIDERS: set[str] = {"ollama"}
+_FREE_PROVIDERS: set[str] = {"ollama", "lmstudio", "llamacpp"}
 
 
 def is_free_model(model: str, provider: str = "") -> bool:

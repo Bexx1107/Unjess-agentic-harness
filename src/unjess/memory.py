@@ -64,6 +64,34 @@ class LearnedRule:
             self.created_at = time.time()
 
 
+@dataclass
+class UserProfile:
+    """User profile persona facts auto-extracted across sessions."""
+
+    role: str = ""
+    tech_stack: list[str] = field(default_factory=list)
+    active_goals: list[str] = field(default_factory=list)
+    preferences: list[str] = field(default_factory=list)
+    last_updated: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.last_updated:
+            self.last_updated = time.time()
+
+    def to_context(self) -> str:
+        """Format persona facts for prompt injection."""
+        parts = []
+        if self.role:
+            parts.append(f"- **User Role:** {self.role}")
+        if self.tech_stack:
+            parts.append(f"- **Tech Stack:** {', '.join(self.tech_stack)}")
+        if self.active_goals:
+            parts.append(f"- **Active Goals:** {', '.join(self.active_goals)}")
+        if self.preferences:
+            parts.append(f"- **Preferences:** {', '.join(self.preferences)}")
+        return "\n".join(parts) if parts else ""
+
+
 # ---------------------------------------------------------------------------
 # Memory Store
 # ---------------------------------------------------------------------------
@@ -82,6 +110,7 @@ class MemoryStore:
         self._storage_dir = storage_dir
         self._summaries: list[ConversationSummary] = []
         self._rules: list[LearnedRule] = []
+        self._profile: UserProfile = UserProfile()
         self._loaded = False
 
     def ensure_loaded(self) -> None:
@@ -90,7 +119,52 @@ class MemoryStore:
             return
         self._load_summaries()
         self._load_rules()
+        self._load_profile()
         self._loaded = True
+
+    # ----- User Profile -----
+
+    def get_user_profile(self) -> UserProfile:
+        """Get the current user profile persona."""
+        self.ensure_loaded()
+        return self._profile
+
+    def update_user_profile(
+        self,
+        role: str = "",
+        tech_stack: Optional[list[str]] = None,
+        active_goals: Optional[list[str]] = None,
+        preferences: Optional[list[str]] = None,
+    ) -> None:
+        """Update the user profile facts."""
+        self.ensure_loaded()
+        updated = False
+
+        if role and role != self._profile.role:
+            self._profile.role = role
+            updated = True
+
+        if tech_stack:
+            for item in tech_stack:
+                if item and item not in self._profile.tech_stack:
+                    self._profile.tech_stack.append(item)
+                    updated = True
+
+        if active_goals:
+            for goal in active_goals:
+                if goal and goal not in self._profile.active_goals:
+                    self._profile.active_goals.append(goal)
+                    updated = True
+
+        if preferences:
+            for pref in preferences:
+                if pref and pref not in self._profile.preferences:
+                    self._profile.preferences.append(pref)
+                    updated = True
+
+        if updated:
+            self._profile.last_updated = time.time()
+            self._save_profile()
 
     # ----- Conversation summaries -----
 
@@ -103,6 +177,10 @@ class MemoryStore:
         self.ensure_loaded()
 
         # Replace if same conversation_id exists
+        existing = next((s for s in self._summaries if s.conversation_id == summary.conversation_id), None)
+        if existing and existing.created_at:
+            summary.created_at = existing.created_at
+
         self._summaries = [
             s for s in self._summaries if s.conversation_id != summary.conversation_id
         ]
@@ -312,7 +390,16 @@ class MemoryStore:
 
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            self._summaries = [ConversationSummary(**s) for s in data]
+            self._summaries = []
+            for s_data in data:
+                s = ConversationSummary(**s_data)
+                if not s.created_at or s.created_at == 0.0:
+                    t_path = Path.home() / ".unjess" / "conversations" / s.conversation_id / "transcript.jsonl"
+                    if t_path.exists():
+                        s.created_at = t_path.stat().st_mtime
+                    else:
+                        s.created_at = 0.0
+                self._summaries.append(s)
             logger.debug("Loaded %d conversation summaries", len(self._summaries))
         except Exception as exc:
             logger.warning("Failed to load summaries: %s", exc)
@@ -365,5 +452,39 @@ class MemoryStore:
                 "created_at": r.created_at,
                 "workspace": r.workspace,
             })
+
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _load_profile(self) -> None:
+        """Load user profile from disk."""
+        path = self._storage_dir / "user_profile.json"
+        if not path.exists():
+            return
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self._profile = UserProfile(
+                role=data.get("role", ""),
+                tech_stack=data.get("tech_stack", []),
+                active_goals=data.get("active_goals", []),
+                preferences=data.get("preferences", []),
+                last_updated=data.get("last_updated", 0.0),
+            )
+            logger.debug("Loaded user profile persona")
+        except Exception as exc:
+            logger.warning("Failed to load user profile: %s", exc)
+
+    def _save_profile(self) -> None:
+        """Save user profile to disk."""
+        self._storage_dir.mkdir(parents=True, exist_ok=True)
+        path = self._storage_dir / "user_profile.json"
+
+        data = {
+            "role": self._profile.role,
+            "tech_stack": self._profile.tech_stack,
+            "active_goals": self._profile.active_goals,
+            "preferences": self._profile.preferences,
+            "last_updated": self._profile.last_updated,
+        }
 
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")

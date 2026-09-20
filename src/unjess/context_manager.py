@@ -28,8 +28,8 @@ _CONTEXT_WINDOWS: dict[str, int] = {
     "claude-3.5-sonnet": 200_000,
     "claude-3.5-haiku": 200_000,
     # Google
-    "gemini-2.5-flash": 1_000_000,
-    "gemini-2.5-pro": 1_000_000,
+    "gemini-3.1-flash": 2_000_000,
+    "gemini-3.1-pro": 2_000_000,
     "gemini-2.0-flash": 1_000_000,
     # Groq
     "llama-3.3-70b": 128_000,
@@ -143,11 +143,15 @@ class ContextManager:
         model: str = "",
         auto_compact_threshold: float = 0.80,
         max_conversation_tokens: int = 80_000,
+        context_window_override: int = 0,
+        enable_compaction: bool = True,
     ) -> None:
         self._model = model
         self._mode: str = "auto"
         self._auto_compact_threshold = auto_compact_threshold
         self._max_conversation_tokens = max_conversation_tokens
+        self._context_window_override = context_window_override
+        self.enable_compaction = enable_compaction
 
     @property
     def model(self) -> str:
@@ -160,6 +164,9 @@ class ContextManager:
 
     def get_context_window(self) -> int:
         """Return the context window size for the current model."""
+        if self._context_window_override > 0:
+            return self._context_window_override
+
         # Exact match
         window = _CONTEXT_WINDOWS.get(self._model)
         if window:
@@ -202,7 +209,7 @@ class ContextManager:
         """Truncate the oldest messages to fit within the context budget.
 
         Always preserves the first user message (for task continuity)
-        and the most recent messages.
+        and the most recent user instruction (to prevent forgetting the user's request).
 
         Args:
             messages: Conversation messages (oldest first).
@@ -225,56 +232,62 @@ class ContextManager:
         if total <= budget:
             return messages  # fits fine
 
-        # Truncation strategy: keep first message + most recent messages
-        # Drop middle messages until we fit
         if len(messages) <= 2:
             return messages
 
-        # Always keep the first message
-        first = messages[0]
-        rest = messages[1:]
+        # Find the latest user message index
+        latest_user_idx = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                latest_user_idx = i
+                break
 
-        # Remove from the front of `rest` until we fit
-        total = count_messages_tokens([first] + rest, self._model)
-        while rest and total > budget:
-            # Group tool call/result pairs into atomic units.
-            # If the next message is an assistant with tool_calls, also remove
-            # the subsequent tool-role messages that reference those calls.
-            # If the next message is a tool result, also remove its companion
-            # assistant message if that assistant has no other remaining results.
-            removed_unit: list[dict[str, Any]] = []
-            head = rest[0]
+        # Structure:
+        # [0]: first message (initial goal)
+        # [1 : latest_user_idx]: middle history (droppable)
+        # [latest_user_idx : ]: protected recent turn
+        if latest_user_idx > 1:
+            first = messages[0]
+            middle = list(messages[1:latest_user_idx])
+            protected = list(messages[latest_user_idx:])
 
-            if head.get("role") == "assistant" and head.get("tool_calls"):
-                # Remove the assistant message and all following tool results
-                # that belong to this call group.
-                call_ids = {tc.get("id") for tc in head["tool_calls"] if tc.get("id")}
-                removed_unit.append(rest.pop(0))
-                while rest and rest[0].get("role") == "tool" and rest[0].get("tool_call_id") in call_ids:
-                    removed_unit.append(rest.pop(0))
-            elif head.get("role") == "tool":
-                # Orphaned tool result — remove it.
-                removed_unit.append(rest.pop(0))
-            else:
-                removed_unit.append(rest.pop(0))
+            # Drop from middle first until budget fits
+            while middle and count_messages_tokens([first] + middle + protected, self._model) > budget:
+                head = middle[0]
+                removed_unit: list[dict[str, Any]] = []
 
-            removed_tokens = count_messages_tokens(removed_unit, self._model)
-            total -= removed_tokens
-            for rm in removed_unit:
-                logger.debug("Truncated message: %s...", str(rm.get("content", ""))[:50])
+                if head.get("role") == "assistant" and head.get("tool_calls"):
+                    call_ids = {tc.get("id") for tc in head["tool_calls"] if tc.get("id")}
+                    removed_unit.append(middle.pop(0))
+                    while middle and middle[0].get("role") == "tool" and middle[0].get("tool_call_id") in call_ids:
+                        removed_unit.append(middle.pop(0))
+                else:
+                    removed_unit.append(middle.pop(0))
 
-        result = [first] + rest
+            result = [first] + middle + protected
+            if len(result) < len(messages):
+                truncated_count = len(messages) - len(result)
+                notice = {
+                    "role": "user",
+                    "content": f"[{truncated_count} earlier middle messages were truncated to fit the context window]",
+                }
+                result.insert(1, notice)
+            messages = result
 
-        if len(result) < len(messages):
-            # Insert a truncation notice
-            truncated_count = len(messages) - len(result)
-            notice = {
-                "role": "user",
-                "content": f"[{truncated_count} earlier messages were truncated to fit the context window]",
-            }
-            result.insert(1, notice)
+        # If still over budget after dropping middle messages (because tool outputs in protected are huge),
+        # truncate the content of tool results inside protected messages instead of dropping user prompts.
+        if count_messages_tokens(messages, self._model) > budget:
+            trimmed: list[dict[str, Any]] = []
+            for msg in messages:
+                if msg.get("role") == "tool" and isinstance(msg.get("content"), str) and len(msg["content"]) > 1000:
+                    m = dict(msg)
+                    m["content"] = m["content"][:1000] + "\n[...tool result truncated to fit context budget...]"
+                    trimmed.append(m)
+                else:
+                    trimmed.append(msg)
+            messages = trimmed
 
-        return result
+        return messages
 
     def compact(
         self,
@@ -289,9 +302,8 @@ class ContextManager:
         concatenation + truncation is used.
 
         The split point between old (summarized) and recent (kept) messages
-        is chosen to avoid breaking tool call/response groups.  Gemini
-        requires that an assistant message with ``tool_calls`` is immediately
-        followed by the corresponding ``tool`` result messages.
+        is chosen to avoid breaking tool call/response groups and to keep
+        the latest user prompt intact.
 
         Args:
             messages: Current conversation messages.
@@ -301,39 +313,36 @@ class ContextManager:
         Returns:
             Compacted message list.
         """
-        if len(messages) <= keep_recent:
-            return messages  # too few to compact
+        if not self.enable_compaction or len(messages) <= keep_recent:
+            return messages  # too few to compact or disabled
 
-        # Find a valid split point: we want at least `keep_recent` messages
-        # at the end, but we must not split inside a tool call group.
-        # A valid split point is an index where messages[index] is NOT
-        # a tool result, and messages[index-1] is NOT an assistant with
-        # pending tool_calls whose results haven't appeared yet.
+        # Ensure split point is before the latest user message if possible
+        latest_user_idx = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                latest_user_idx = i
+                break
+
         split = len(messages) - keep_recent
+        if latest_user_idx != -1 and split > latest_user_idx:
+            split = latest_user_idx
 
         # Walk backwards from the initial split to find a safe boundary.
-        # A safe boundary is a user message, or a text-only assistant message.
         while split > 1:
             msg = messages[split]
             role = msg.get("role", "")
 
-            # If this message is a tool result, we can't start here —
-            # its parent assistant message would be missing.
             if role == "tool":
                 split -= 1
                 continue
 
-            # If this is an assistant with tool_calls, we can't start here —
-            # the tool results that follow would be orphaned from context.
             if role == "assistant" and msg.get("tool_calls"):
                 split -= 1
                 continue
 
-            # Safe: user message, text-only assistant, or system message
             break
 
         if split <= 1:
-            # Can't compact without breaking structure
             return messages
 
         old_messages = messages[:split]
@@ -359,20 +368,26 @@ class ContextManager:
                 logger.warning("LLM summarization failed: %s", exc)
                 summary = old_text[:500] + "..."
         else:
-            # Simple truncation summary
             summary = old_text[:500]
             if len(old_text) > 500:
                 summary += f"\n\n[...{len(old_messages)} messages summarized]"
 
-        # Build compacted conversation.
-        # Use role "user" for the summary — Gemini rejects mid-conversation
-        # "system" messages and requires conversations to start with "user".
         summary_msg = {
             "role": "user",
             "content": f"[Conversation summary of {len(old_messages)} earlier messages]:\n{summary}",
         }
 
-        return [summary_msg] + recent_messages
+        # Truncate overly long tool outputs in recent_messages to guarantee token reduction
+        compacted_recent: list[dict[str, Any]] = []
+        for msg in recent_messages:
+            if msg.get("role") == "tool" and isinstance(msg.get("content"), str) and len(msg["content"]) > 1000:
+                m = dict(msg)
+                m["content"] = m["content"][:1000] + "\n[...tool output truncated during compaction...]"
+                compacted_recent.append(m)
+            else:
+                compacted_recent.append(msg)
+
+        return [summary_msg] + compacted_recent
 
     def get_context_breakdown(
         self,
@@ -413,7 +428,7 @@ class ContextManager:
         1. Overall utilization exceeds the threshold (% of context window), OR
         2. Conversation tokens alone exceed ``max_conversation_tokens`` — this
            prevents runaway growth on large-context models where the percentage
-           threshold would never fire (e.g. 80% of 1M = 800K).
+           threshold would never fire.
 
         Args:
             system_prompt: The current system prompt.
@@ -423,17 +438,22 @@ class ContextManager:
         Returns:
             True if utilization exceeds the threshold.
         """
+        if not self.enable_compaction:
+            return False
+
         threshold = threshold if threshold is not None else self._auto_compact_threshold
         breakdown = self.get_context_breakdown(system_prompt, messages)
         utilization = breakdown.get("utilization_pct", 0) / 100.0
 
-        # Hard cap: compact when conversation tokens exceed absolute limit
+        # Dynamic hard cap: 60% of model's context window or max_conversation_tokens
+        window = self.get_context_window()
+        effective_max = min(self._max_conversation_tokens, int(window * 0.6))
         conv_tokens = breakdown.get("conversation_tokens", 0)
-        if conv_tokens > self._max_conversation_tokens:
+        if conv_tokens > effective_max:
             logger.info(
                 "Conversation tokens (%d) exceed hard cap (%d), triggering compaction",
                 conv_tokens,
-                self._max_conversation_tokens,
+                effective_max,
             )
             return True
 

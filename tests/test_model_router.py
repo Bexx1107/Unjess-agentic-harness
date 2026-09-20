@@ -128,8 +128,8 @@ class TestModelRouterConstruction:
         assert router._cheap_model == "claude-3-5-haiku-20241022"
 
     def test_auto_detect_gemini(self) -> None:
-        router = ModelRouter(_settings("gemini-2.5-pro"))
-        assert router._cheap_model == "gemini-2.5-flash"
+        router = ModelRouter(_settings("gemini-3.1-pro"))
+        assert router._cheap_model == "gemini-3.1-flash"
 
     def test_auto_detect_o3(self) -> None:
         router = ModelRouter(_settings("o3"))
@@ -354,7 +354,7 @@ class TestDetectCheapModel:
 
     def test_gemini_family(self) -> None:
         router = ModelRouter(_settings("gemini-2.0-flash"))
-        assert router._cheap_model == "gemini-2.5-flash"
+        assert router._cheap_model == "gemini-3.1-flash"
 
     def test_unknown_family_same_model(self) -> None:
         router = ModelRouter(_settings("llama3"))

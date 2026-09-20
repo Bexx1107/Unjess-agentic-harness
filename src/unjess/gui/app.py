@@ -7,7 +7,10 @@ initialization, agent threading, and route registration.
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from nicegui import ui
@@ -48,14 +51,14 @@ class _GUIApp:
         self.cmd_ctx = cmd_ctx
         self.router = router
         self.conv_logger = conv_logger
-        # In GUI mode, don't default to CWD (which would be the exe's dir).
-        # Start with no workspace — user picks one via New Conversation dialog.
-        import sys
-        if getattr(sys, 'frozen', False) or str(settings.workspace) == ".":
-            _ws = ""
-            # Set settings workspace to home dir so agent doesn't use exe dir
-            import os
-            settings.workspace = os.path.expanduser("~")
+        # In GUI mode, don't default to CWD or Home dir (which would expose all PC files).
+        # Default Quick Chat to an isolated workspace folder inside ~/.unjess/workspaces/
+        home_str = os.path.expanduser("~")
+        if getattr(sys, 'frozen', False) or str(settings.workspace) in (".", "", home_str):
+            default_ws = Path.home() / ".unjess" / "workspaces" / "quick_chat"
+            default_ws.mkdir(parents=True, exist_ok=True)
+            settings.workspace = default_ws
+            _ws = str(default_ws)
         else:
             _ws = str(settings.workspace)
 
@@ -103,6 +106,13 @@ class _GUIApp:
         self.state.is_thinking = True
         self.state.dirty = True
 
+        # Tag spawned subagents/tasks with this conversation ID
+        conv_id = self.state.current_conversation_id
+        if hasattr(self.agent, "_subagent_manager") and self.agent._subagent_manager:
+            self.agent._subagent_manager.current_parent_id = conv_id
+        if self.state.task_manager:
+            self.state.task_manager.current_parent_id = conv_id
+
         def _turn() -> None:
             try:
                 self.agent.run(message, images=images or [])
@@ -145,15 +155,32 @@ def launch(
     """
     from unjess.gui.pages.chat import setup_chat_page
     from unjess.gui.pages.onboarding import setup_onboarding_page
+    from unjess.gui.pwa import register_pwa_routes, inject_pwa_meta
+    from unjess.gui.auth import is_authenticated, render_pin_auth_screen
     from unjess.config import is_first_run
 
     ga = _GUIApp(agent, settings, cmd_ctx, router, conv_logger, memory_store)
 
+    # Register PWA routes (/manifest.json, /sw.js)
+    try:
+        register_pwa_routes()
+    except Exception as exc:
+        logger.debug("Failed to register PWA routes: %s", exc)
+
     @ui.page("/")
     def chat_page() -> None:
+        inject_pwa_meta()
         if is_first_run():
             ui.navigate.to("/onboarding")
             return
+
+        if not is_authenticated(ga.settings):
+            render_pin_auth_screen(
+                settings=ga.settings,
+                on_success=lambda: ui.navigate.to("/"),
+            )
+            return
+
         setup_chat_page(
             state=ga.state,
             input_handler=ga.input_handler,
@@ -166,6 +193,7 @@ def launch(
 
     @ui.page("/onboarding")
     def onboarding_page() -> None:
+        inject_pwa_meta()
         setup_onboarding_page(ga.state, ga.settings, ga.router)
 
     # Resolve favicon/icon paths
@@ -180,20 +208,59 @@ def launch(
     _favicon = str(_assets / "icon_mark_white.svg") if _assets else None
 
     # Start server
+    host = "0.0.0.0" if getattr(settings, "allow_network_access", True) else "127.0.0.1"
+    target_port = getattr(settings, "network_port", 8080)
+
+    # Check port availability to avoid crash if 8080 is held by background process
+    import socket
+
+    def _get_or_create_storage_secret() -> str:
+        """Retrieve or generate a persistent local storage secret for NiceGUI."""
+        import secrets
+
+        secret_file = Path.home() / ".unjess" / ".session_secret"
+        try:
+            if secret_file.is_file():
+                secret = secret_file.read_text(encoding="utf-8").strip()
+                if secret:
+                    return secret
+            secret = secrets.token_hex(32)
+            secret_file.parent.mkdir(parents=True, exist_ok=True)
+            secret_file.write_text(secret, encoding="utf-8")
+            try:
+                secret_file.chmod(0o600)
+            except OSError:
+                pass
+            return secret
+        except Exception:
+            return secrets.token_hex(32)
+
+    def _get_open_port(desired_port: int) -> int:
+        for p in range(desired_port, desired_port + 50):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as _sock:
+                    _sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    _sock.bind((host, p))
+                    return p
+            except OSError:
+                continue
+        return desired_port
+
+    port = _get_open_port(target_port)
+
     run_kwargs: dict = dict(
         title="Unjess",
         dark=True,
         reload=False,
+        host=host,
+        port=port,
+        storage_secret=_get_or_create_storage_secret(),
     )
     if _favicon:
         run_kwargs["favicon"] = _favicon
 
     if native:
-        from nicegui import native as nicegui_native
         run_kwargs["native"] = True
-        run_kwargs["port"] = nicegui_native.find_open_port()
         run_kwargs["window_size"] = (1280, 800)
-    else:
-        run_kwargs["port"] = 8080
 
     ui.run(**run_kwargs)

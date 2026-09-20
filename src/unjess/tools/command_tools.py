@@ -15,10 +15,58 @@ if TYPE_CHECKING:
     from unjess.permissions import PermissionManager
 
 
+import re
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 120
 _MAX_OUTPUT_CHARS = 20_000
+
+
+def _sanitize_command_and_cwd(
+    command: str, cwd: Optional[str], workspace: Path
+) -> tuple[str, Path, Optional[str]]:
+    """Sanitize command and cwd, handling $HOME, ~, and leading cd commands.
+
+    Returns:
+        (cleaned_command, resolved_work_dir, error_message)
+    """
+    home = Path.home()
+
+    # 1. Detect and extract leading 'cd <dir> &&' or 'cd <dir>;'
+    cd_match = re.match(
+        r'^\s*cd\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))\s*(?:&&|;)\s*(.+)$',
+        command,
+        flags=re.DOTALL,
+    )
+    if cd_match:
+        extracted_dir = cd_match.group(1) or cd_match.group(2) or cd_match.group(3)
+        command = cd_match.group(4).strip()
+        if not cwd:
+            cwd = extracted_dir
+
+    # 2. Normalize cwd
+    if cwd:
+        cwd_str = str(cwd).strip()
+        cwd_str = cwd_str.replace("$HOME", str(home)).replace("~", str(home))
+        cwd_str = cwd_str.replace("%USERPROFILE%", str(home)).replace("$env:USERPROFILE", str(home))
+
+        cand = Path(cwd_str)
+        if not cand.is_absolute():
+            work_dir = (workspace / cand).resolve()
+        else:
+            work_dir = cand.resolve()
+
+        ws_resolved = workspace.resolve()
+        # Check if inside workspace or user home
+        if not str(work_dir).startswith(str(ws_resolved)) and not str(work_dir).startswith(str(home)):
+            return command, work_dir, f"Error: Working directory '{cwd}' is outside the workspace."
+        if not work_dir.exists():
+            return command, work_dir, f"Error: Working directory not found: {cwd}"
+    else:
+        work_dir = workspace.resolve()
+
+    return command, work_dir, None
 
 
 def _run_command(
@@ -44,15 +92,10 @@ def _run_command(
     Returns:
         Combined stdout + stderr output, or an error message.
     """
-    # Resolve working directory
-    if cwd:
-        work_dir = (workspace / cwd).resolve()
-        if not str(work_dir).startswith(str(workspace.resolve())):
-            return f"Error: Working directory '{cwd}' is outside the workspace."
-        if not work_dir.exists():
-            return f"Error: Working directory not found: {cwd}"
-    else:
-        work_dir = workspace
+    # Sanitize command and resolve working directory
+    command, work_dir, err = _sanitize_command_and_cwd(command, cwd, workspace)
+    if err:
+        return err
 
     # Sandbox safety check (runs before permission prompt)
     if sandbox is not None:

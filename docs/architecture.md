@@ -869,9 +869,9 @@ Conversation ID: abc-123-def
 #### Block 3: `<mcp_servers>`
 Catalog of all connected MCP servers and their tools.
 ```
-# image-gen-server
+# dmd-studio
 Eager: generate_image, restyle_image
-Lazy: upscale_image, analyze_image
+Lazy: upscale_image, analyze_script
 
 # unity-bridge  
 Lazy: unity_ping, unity_get_hierarchy, unity_create_object

@@ -268,8 +268,9 @@ class TestProviderBasics:
     def test_provider_name(self, provider: AnthropicProvider) -> None:
         assert provider.provider_name == "anthropic"
 
-    def test_list_models_returns_curated_list(self, provider: AnthropicProvider) -> None:
-        models = provider.list_models()
+    def test_list_models_fallback_on_error(self, provider: AnthropicProvider) -> None:
+        with patch.object(provider._client.models, "list", side_effect=Exception("API Error")):
+            models = provider.list_models()
         assert len(models) == 4
         assert "claude-sonnet-4-20250514" in models
         assert "claude-opus-4-20250514" in models

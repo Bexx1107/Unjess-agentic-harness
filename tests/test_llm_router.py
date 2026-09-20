@@ -109,7 +109,7 @@ class TestDetectProviderGoogle:
         assert _detect_provider("gemini-pro") == "google"
 
     def test_gemini_2_flash(self) -> None:
-        assert _detect_provider("gemini-2.5-flash") == "google"
+        assert _detect_provider("gemini-3.1-flash") == "google"
 
     def test_gemini_1_5_pro(self) -> None:
         assert _detect_provider("gemini-1.5-pro-latest") == "google"
@@ -176,3 +176,67 @@ class TestDetectProviderOther:
 
     def test_empty_model_defaults_to_openai(self) -> None:
         assert _detect_provider("") == "openai"
+
+
+# ---------------------------------------------------------------------------
+# Ollama API Key Integration
+# ---------------------------------------------------------------------------
+
+class TestOllamaProviderKeyIntegration:
+    """Tests for Ollama local and Ollama API cloud wiring in ProviderRouter."""
+
+    def test_ollama_default_local(self) -> None:
+        from unjess.config import Settings
+        from unjess.llm.router import ProviderRouter
+
+        settings = Settings()
+        router = ProviderRouter(settings)
+        assert "ollama" in router.available_providers
+        provider, _ = router.get_provider("llama3.1", explicit_provider="ollama")
+        assert provider.provider_name == "ollama"
+        assert provider._client.api_key == "ollama"
+        assert str(provider._client.base_url).rstrip("/") == "http://localhost:11434/v1"
+
+    def test_ollama_api_settings_key(self) -> None:
+        from unjess.config import Settings
+        from unjess.llm.router import ProviderRouter
+
+        settings = Settings(api_keys={"ollama-api": "test-ollama-cloud-key-123"})
+        router = ProviderRouter(settings)
+        assert "ollama-api" in router.available_providers
+        provider, _ = router.get_provider("llama3.3", explicit_provider="ollama-api")
+        assert provider.provider_name == "ollama-api"
+        assert provider._client.api_key == "test-ollama-cloud-key-123"
+
+    def test_ollama_api_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unjess.config import Settings
+        from unjess.llm.router import ProviderRouter
+
+        monkeypatch.setenv("OLLAMA_API_KEY", "env-ollama-key-xyz")
+        settings = Settings()
+        router = ProviderRouter(settings)
+        assert "ollama-api" in router.available_providers
+        provider, _ = router.get_provider("llama3.3", explicit_provider="ollama-api")
+        assert provider.provider_name == "ollama-api"
+        assert provider._client.api_key == "env-ollama-key-xyz"
+
+    def test_ollama_base_url_normalization(self) -> None:
+        from unjess.config import Settings
+        from unjess.llm.router import ProviderRouter
+
+        settings = Settings(ollama_base_url="http://custom:11434/")
+        router = ProviderRouter(settings)
+        provider, _ = router.get_provider("llama3.1", explicit_provider="ollama")
+        assert str(provider._client.base_url).rstrip("/") == "http://custom:11434/v1"
+
+    def test_ollama_api_base_url_normalization(self) -> None:
+        from unjess.config import Settings
+        from unjess.llm.router import ProviderRouter
+
+        settings = Settings(
+            api_keys={"ollama-api": "key123"},
+            ollama_api_base_url="https://api.ollama.com/",
+        )
+        router = ProviderRouter(settings)
+        provider, _ = router.get_provider("llama3.3", explicit_provider="ollama-api")
+        assert str(provider._client.base_url).rstrip("/") == "https://api.ollama.com/v1"

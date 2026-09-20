@@ -41,9 +41,8 @@ The agent will read your files, write changes (with diffs), run commands (with y
 ### Install from source
 
 ```bash
-git clone https://github.com/Bexx1107/Unjess-agentic-harness.git
-cd Unjess-agentic-harness
-
+git clone https://github.com/Bexx1107/unjess.git
+cd unjess
 pip install -e ".[all]"
 ```
 
@@ -148,8 +147,9 @@ Launch with `njss --gui` (browser) or `njss-gui` (native window).
 | **Anthropic** | Claude Sonnet 5, Opus 4.8 | ❌ | `ANTHROPIC_API_KEY` |
 | **xAI** | Grok 4.1 Fast, Grok 4.5 | ❌ | `XAI_API_KEY` |
 | **OpenRouter** | Any model (free tier auto-pick) | ✅ | `OPENROUTER_API_KEY` |
-| **Cerebras** | ZAI-GLM 4.7, Llama 3.5 70B | ✅ | `CEREBRAS_API_KEY` |
-| **Ollama** | Any local model (Llama 3.5, Qwen 3) | ✅ Always | No key needed |
+| **Kimi** | Moonshot AI (kimi-k2.5, kimi-k3) | ❌ | `MOONSHOT_API_KEY` |
+| **Qwen** | Alibaba DashScope (qwen-max, qwen-plus) | ❌ | `DASHSCOPE_API_KEY` |
+| **Ollama** | Local & cloud models (Qwen, Llama, DeepSeek) | ✅ Local / ☁️ Cloud | Optional `OLLAMA_API_KEY` |
 
 API keys are saved to `~/.unjess/keys.yaml` (0600 permissions). Enter once, never again.
 
@@ -296,5 +296,5 @@ MIT
 ---
 
 <p align="center">
-  <sub>Open-source AI coding agent</sub>
+  <sub>Built by <a href="https://github.com/Bexx1107">Bexx</a></sub>
 </p>

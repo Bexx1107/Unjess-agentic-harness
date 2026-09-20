@@ -56,7 +56,7 @@ def _make_candidate(parts: list[SimpleNamespace] | None = None, finish_reason: s
 
 def _make_response(
     parts: list[SimpleNamespace] | None = None,
-    model: str = "gemini-2.5-flash",
+    model: str = "gemini-3.1-flash",
     finish_reason: str = "STOP",
     usage: SimpleNamespace | None = None,
     candidates: list[SimpleNamespace] | None = None,
@@ -79,7 +79,7 @@ def provider() -> GoogleProvider:
     with patch("unjess.llm.google_provider.genai") as mock_genai:
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
-        p = GoogleProvider(api_key="test-key", default_model="gemini-2.5-flash")
+        p = GoogleProvider(api_key="test-key", default_model="gemini-3.1-flash")
     p._mock_client = mock_client  # type: ignore[attr-defined]
     return p
 
@@ -347,12 +347,12 @@ class TestListModels:
 
     def test_list_models_basic(self, provider: GoogleProvider) -> None:
         mock_model = SimpleNamespace(
-            name="models/gemini-2.5-flash",
+            name="models/gemini-3.1-flash",
             supported_actions=["generateContent"],
         )
         provider._mock_client.models.list.return_value = [mock_model]  # type: ignore[attr-defined]
         result = provider.list_models()
-        assert result == ["gemini-2.5-flash"]
+        assert result == ["gemini-3.1-flash"]
 
     def test_list_models_strips_prefix(self, provider: GoogleProvider) -> None:
         mock_model = SimpleNamespace(name="models/gemini-pro", supported_actions=["generateContent"])
@@ -423,20 +423,20 @@ class TestChat:
         resp = provider.chat([{"role": "user", "content": "Hello"}])
         assert isinstance(resp, LLMResponse)
         assert resp.text == "Hi there"
-        assert resp.model == "gemini-2.5-flash"
+        assert resp.model == "gemini-3.1-flash"
 
     def test_chat_uses_default_model(self, provider: GoogleProvider) -> None:
         raw = _make_response()
         provider._mock_client.models.generate_content.return_value = raw  # type: ignore[attr-defined]
         provider.chat([{"role": "user", "content": "Hi"}])
         call_args = provider._mock_client.models.generate_content.call_args  # type: ignore[attr-defined]
-        assert "gemini-2.5-flash" in str(call_args)
+        assert "gemini-3.1-flash" in str(call_args)
 
     def test_chat_model_override(self, provider: GoogleProvider) -> None:
         raw = _make_response()
         provider._mock_client.models.generate_content.return_value = raw  # type: ignore[attr-defined]
-        resp = provider.chat([{"role": "user", "content": "Hi"}], model="gemini-2.5-pro")
-        assert resp.model == "gemini-2.5-pro"
+        resp = provider.chat([{"role": "user", "content": "Hi"}], model="gemini-3.1-pro")
+        assert resp.model == "gemini-3.1-pro"
 
     def test_chat_with_tool_calls(self, provider: GoogleProvider) -> None:
         parts = [

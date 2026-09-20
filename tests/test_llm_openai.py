@@ -457,15 +457,15 @@ class TestListModels:
             mock_cls.return_value = mock_client
             p = OpenAICompatibleProvider(api_key="k", name="google")
         mock_client.models.list.return_value = [
-            SimpleNamespace(id="gemini-2.5-flash"),
-            SimpleNamespace(id="gemini-2.5-pro"),
+            SimpleNamespace(id="gemini-3.1-flash"),
+            SimpleNamespace(id="gemini-3.1-pro"),
             SimpleNamespace(id="gemini-tts-model"),
             SimpleNamespace(id="gemma-3n-e4b"),
             SimpleNamespace(id="lyria-something"),
         ]
         result = p.list_models()
-        assert "gemini-2.5-flash" in result
-        assert "gemini-2.5-pro" in result
+        assert "gemini-3.1-flash" in result
+        assert "gemini-3.1-pro" in result
         assert "gemini-tts-model" not in result
         assert "gemma-3n-e4b" not in result
         assert "lyria-something" not in result
@@ -534,3 +534,37 @@ class TestErrorHandling:
         provider._mock_client.chat.completions.create.return_value = raw  # type: ignore[attr-defined]
         resp = provider.chat([{"role": "user", "content": "Hi"}])
         assert resp.finish_reason == ""
+
+    def test_reasoning_effort_auto_set_for_gpt5_luna_with_tools(self, provider: OpenAICompatibleProvider) -> None:
+        tools = [{"name": "read_file", "description": "read", "parameters": {}}]
+        raw = _make_response()
+        provider._mock_client.chat.completions.create.return_value = raw  # type: ignore[attr-defined]
+        provider.chat([{"role": "user", "content": "Hi"}], tools=tools, model="gpt-5.6-luna")
+        call_kwargs = provider._mock_client.chat.completions.create.call_args[1]  # type: ignore[attr-defined]
+        assert call_kwargs.get("reasoning_effort") == "none"
+
+    def test_reasoning_effort_error_retries_with_none(self, provider: OpenAICompatibleProvider) -> None:
+        tools = [{"name": "read_file", "description": "read", "parameters": {}}]
+        raw = _make_response()
+
+        def side_effect(**kwargs: Any) -> Any:
+            if kwargs.get("reasoning_effort") != "none":
+                raise Exception("Function tools with reasoning_effort are not supported. Set reasoning_effort to 'none'.")
+            return raw
+
+        provider._mock_client.chat.completions.create.side_effect = side_effect  # type: ignore[attr-defined]
+        resp = provider.chat([{"role": "user", "content": "Hi"}], tools=tools, model="custom-reasoning-model")
+        assert resp.text == "Hello"
+
+    def test_reasoning_effort_unsupported_param_removes_param(self, provider: OpenAICompatibleProvider) -> None:
+        tools = [{"name": "read_file", "description": "read", "parameters": {}}]
+        raw = _make_response()
+
+        def side_effect(**kwargs: Any) -> Any:
+            if "reasoning_effort" in kwargs:
+                raise Exception("Unrecognized request argument: reasoning_effort")
+            return raw
+
+        provider._mock_client.chat.completions.create.side_effect = side_effect  # type: ignore[attr-defined]
+        resp = provider.chat([{"role": "user", "content": "Hi"}], tools=tools, model="gpt-5.6-luna")
+        assert resp.text == "Hello"

@@ -4,12 +4,14 @@ Runs in a background thread and fires callbacks or sends
 messages when timers expire or cron triggers fire.
 """
 
+import json
 import itertools
 import logging
 import re
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,10 @@ class ScheduledTask:
     next_fire: float = 0.0
     fire_count: int = 0
     cancelled: bool = False
+    enabled: bool = True
+    last_run: float = 0.0
+    last_status: str = "pending"  # pending, running, succeeded, failed, paused
+    last_result: str = ""
 
     def __post_init__(self) -> None:
         if not self.created_at:
@@ -38,13 +44,52 @@ class ScheduledTask:
     @property
     def is_active(self) -> bool:
         """Whether this task is still active."""
-        if self.cancelled:
+        if self.cancelled or not self.enabled:
             return False
         if self.task_type == "timer":
             return self.fire_count == 0
         if self.max_iterations > 0:
             return self.fire_count < self.max_iterations
         return True
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize task to dictionary for disk persistence."""
+        return {
+            "id": self.id,
+            "task_type": self.task_type,
+            "prompt": self.prompt,
+            "duration_seconds": self.duration_seconds,
+            "cron_expression": self.cron_expression,
+            "max_iterations": self.max_iterations,
+            "created_at": self.created_at,
+            "next_fire": self.next_fire,
+            "fire_count": self.fire_count,
+            "cancelled": self.cancelled,
+            "enabled": self.enabled,
+            "last_run": self.last_run,
+            "last_status": self.last_status,
+            "last_result": self.last_result,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ScheduledTask":
+        """Deserialize task from dictionary."""
+        return cls(
+            id=data.get("id", ""),
+            task_type=data.get("task_type", "cron"),
+            prompt=data.get("prompt", ""),
+            duration_seconds=float(data.get("duration_seconds", 0.0)),
+            cron_expression=data.get("cron_expression", ""),
+            max_iterations=int(data.get("max_iterations", 0)),
+            created_at=float(data.get("created_at", time.time())),
+            next_fire=float(data.get("next_fire", 0.0)),
+            fire_count=int(data.get("fire_count", 0)),
+            cancelled=bool(data.get("cancelled", False)),
+            enabled=bool(data.get("enabled", True)),
+            last_run=float(data.get("last_run", 0.0)),
+            last_status=data.get("last_status", "pending"),
+            last_result=data.get("last_result", ""),
+        )
 
 
 def parse_cron(expression: str) -> dict[str, list[int]]:
@@ -145,15 +190,49 @@ class Scheduler:
 
     Args:
         check_interval: How often to check for triggers (seconds).
+        schedules_file: Path to JSON persistence file.
     """
 
-    def __init__(self, check_interval: float = 1.0) -> None:
+    def __init__(
+        self,
+        check_interval: float = 1.0,
+        schedules_file: Optional[Path] = None,
+    ) -> None:
         self._check_interval = check_interval
+        self._schedules_file = schedules_file or (Path.home() / ".unjess" / "schedules.json")
         self._tasks: dict[str, ScheduledTask] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._counter = itertools.count(1)
+        self.load_schedules()
+
+    def save_schedules(self) -> None:
+        """Persist active schedules to disk."""
+        try:
+            self._schedules_file.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock:
+                data = {t_id: t.to_dict() for t_id, t in self._tasks.items()}
+            with open(self._schedules_file, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+        except Exception as exc:
+            logger.error("Failed to save schedules to %s: %s", self._schedules_file, exc)
+
+    def load_schedules(self) -> None:
+        """Load persisted schedules from disk."""
+        if not self._schedules_file.exists():
+            return
+        try:
+            with open(self._schedules_file, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            with self._lock:
+                for t_id, t_dict in data.items():
+                    if t_id not in self._tasks:
+                        task = ScheduledTask.from_dict(t_dict)
+                        self._tasks[t_id] = task
+            logger.info("Loaded %d schedules from %s", len(self._tasks), self._schedules_file)
+        except Exception as exc:
+            logger.error("Failed to load schedules from %s: %s", self._schedules_file, exc)
 
     def start(self) -> None:
         """Start the scheduler background thread."""
@@ -206,6 +285,8 @@ class Scheduler:
         with self._lock:
             self._tasks[task_id] = task
 
+        self.save_schedules()
+
         if not self._running:
             self.start()
 
@@ -247,6 +328,8 @@ class Scheduler:
         with self._lock:
             self._tasks[task_id] = task
 
+        self.save_schedules()
+
         if not self._running:
             self.start()
 
@@ -254,25 +337,60 @@ class Scheduler:
         return task_id
 
     def cancel(self, task_id: str) -> bool:
-        """Cancel a scheduled task.
-
-        Args:
-            task_id: The task to cancel.
-
-        Returns:
-            True if found and cancelled.
-        """
+        """Cancel a scheduled task."""
         with self._lock:
             task = self._tasks.get(task_id)
             if task:
                 task.cancelled = True
+                task.enabled = False
+                self.save_schedules()
+                return True
+        return False
+
+    def pause_task(self, task_id: str) -> bool:
+        """Pause a scheduled task."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task:
+                task.enabled = False
+                task.last_status = "paused"
+                self.save_schedules()
+                return True
+        return False
+
+    def resume_task(self, task_id: str) -> bool:
+        """Resume a paused task."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task:
+                task.enabled = True
+                task.last_status = "pending"
+                self.save_schedules()
+                return True
+        return False
+
+    def trigger_now(self, task_id: str) -> bool:
+        """Trigger a task immediately on-demand."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+        if task:
+            self._fire(task)
+            return True
+        return False
+
+    def delete_task(self, task_id: str) -> bool:
+        """Delete a task permanently."""
+        with self._lock:
+            if task_id in self._tasks:
+                del self._tasks[task_id]
+                self.save_schedules()
                 return True
         return False
 
     def list_tasks(self) -> list[ScheduledTask]:
-        """List all active tasks."""
+        """List all tasks (active or paused)."""
         with self._lock:
-            return [t for t in self._tasks.values() if t.is_active]
+            return list(self._tasks.values())
 
     # ----- Internal -----
 
@@ -309,8 +427,11 @@ class Scheduler:
             time.sleep(self._check_interval)
 
     def _fire(self, task: ScheduledTask) -> None:
-        """Fire a task."""
+        """Fire a task as an isolated headless subagent."""
         task.fire_count += 1
+        task.last_run = time.time()
+        task.last_status = "running"
+        self.save_schedules()
         logger.info("Task '%s' fired (count=%d): %s", task.id, task.fire_count, task.prompt[:80])
 
         if task.callback:
@@ -318,3 +439,24 @@ class Scheduler:
                 task.callback()
             except Exception as exc:
                 logger.error("Task '%s' callback failed: %s", task.id, exc)
+
+        # Run headless subagent task
+        try:
+            from unjess.subagents.scheduled_runner import execute_scheduled_subagent
+
+            def _on_run_complete(run_log: Any) -> None:
+                task.last_status = run_log.status
+                task.last_result = run_log.result or run_log.error
+                self.save_schedules()
+
+            execute_scheduled_subagent(
+                task_id=task.id,
+                prompt=task.prompt,
+                task_type=task.task_type,
+                on_complete=_on_run_complete,
+            )
+        except Exception as exc:
+            task.last_status = "failed"
+            task.last_result = str(exc)
+            self.save_schedules()
+            logger.error("Failed to launch headless subagent for %s: %s", task.id, exc)

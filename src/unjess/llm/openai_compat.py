@@ -74,8 +74,9 @@ class OpenAICompatibleProvider(LLMProvider):
         base_url: str = "https://api.openai.com/v1",
         default_model: str = "gpt-4o-mini",
         name: str = "openai",
+        timeout: float = 60.0,
     ) -> None:
-        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=60.0)
+        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self._default_model = default_model
         self._name = name
 
@@ -107,6 +108,10 @@ class OpenAICompatibleProvider(LLMProvider):
                     if ":free" in mid or mid.startswith("openrouter/")
                 ]
                 return sorted(free_ids)
+
+            # llama.cpp — return loaded models or fallback to 'llamacpp'
+            if self._name == "llamacpp":
+                return sorted(model_ids) if model_ids else ["llamacpp"]
 
             # Google — only gemini chat models
             if self._name == "google":
@@ -152,6 +157,34 @@ class OpenAICompatibleProvider(LLMProvider):
 
     # ----- non-streaming -----
 
+    def _create_completion(self, **kwargs: Any) -> Any:
+        """Call chat.completions.create with fallback handling for stream_options and reasoning_effort."""
+        try:
+            return self._call_with_retries(**kwargs)
+        except Exception as exc:
+            err_msg = str(exc).lower()
+            # Case 1: Provider does not support stream_options
+            if "stream_options" in err_msg and "stream_options" in kwargs:
+                kwargs_copy = dict(kwargs)
+                kwargs_copy.pop("stream_options", None)
+                logger.info("Provider does not support stream_options, retrying without it.")
+                return self._create_completion(**kwargs_copy)
+            # Case 2: Provider requires reasoning_effort="none" when function tools are passed
+            if "reasoning_effort" in err_msg and kwargs.get("reasoning_effort") != "none":
+                kwargs_copy = dict(kwargs)
+                kwargs_copy["reasoning_effort"] = "none"
+                logger.info("Function tools require reasoning_effort='none', retrying with reasoning_effort='none'.")
+                return self._create_completion(**kwargs_copy)
+            # Case 3: Provider rejects reasoning_effort parameter as unrecognized
+            if "reasoning_effort" in err_msg and "reasoning_effort" in kwargs:
+                kwargs_copy = dict(kwargs)
+                kwargs_copy.pop("reasoning_effort", None)
+                logger.info("Provider rejected reasoning_effort parameter, retrying without it.")
+                return self._create_completion(**kwargs_copy)
+            raise
+
+    # ----- non-streaming -----
+
     def chat(
         self,
         messages: list[dict[str, Any]],
@@ -163,13 +196,19 @@ class OpenAICompatibleProvider(LLMProvider):
         kwargs: dict[str, Any] = {"model": model, "messages": messages}
 
         # Ollama: bust KV cache to prevent old context from leaking
-        if self._name == "ollama":
+        if self._name in ("ollama", "ollama-api"):
             kwargs["seed"] = random.randint(0, 2**31)
+
+        # Local providers: enforce low temperature for deterministic tool calling & no rambling
+        if self._name in ("ollama", "ollama-api", "llamacpp", "lmstudio"):
+            kwargs["temperature"] = 0.1
 
         if tools:
             kwargs["tools"] = _convert_tools_to_openai(tools)
+            if self._name == "openai" and any(k in model.lower() for k in ("gpt-5", "o1", "o3", "o4", "luna", "reasoning")):
+                kwargs["reasoning_effort"] = "none"
 
-        raw = self._call_with_retries(**kwargs)
+        raw = self._create_completion(**kwargs)
 
         # Extract reasoning tokens from completion_tokens_details (o3/o4-mini)
         thinking_tokens = 0
@@ -221,27 +260,22 @@ class OpenAICompatibleProvider(LLMProvider):
             "stream": True,
             "stream_options": {"include_usage": True},
             # Ollama: bust KV cache to prevent context leaking between sessions
-            **(({"seed": random.randint(0, 2**31)}) if self._name == "ollama" else {}),
+            **(({"seed": random.randint(0, 2**31)}) if self._name in ("ollama", "ollama-api") else {}),
+            # Local providers: low temperature for deterministic tool calling & no rambling
+            **(({"temperature": 0.1}) if self._name in ("ollama", "ollama-api", "llamacpp", "lmstudio") else {}),
         }
 
         if tools:
             kwargs["tools"] = _convert_tools_to_openai(tools)
+            if self._name == "openai" and any(k in model.lower() for k in ("gpt-5", "o1", "o3", "o4", "luna", "reasoning")):
+                kwargs["reasoning_effort"] = "none"
 
-        # Try with stream_options first; fall back without if the provider
-        # doesn't support it (Ollama, Groq, Mistral).
-        try:
-            stream = self._call_with_retries(**kwargs)
-        except Exception as exc:
-            if "stream_options" in str(exc).lower():
-                kwargs.pop("stream_options", None)
-                logger.info("Provider does not support stream_options, retrying without it.")
-                stream = self._call_with_retries(**kwargs)
-            else:
-                raise
+        stream = self._create_completion(**kwargs)
 
         # Accumulate tool calls across chunks (they arrive in pieces)
         pending_tool_calls: dict[int, dict[str, str]] = {}
         usage: Usage | None = None
+        full_text = ""
 
         for chunk in stream:
             # Usage comes on the final chunk (with stream_options.include_usage)
@@ -260,8 +294,14 @@ class OpenAICompatibleProvider(LLMProvider):
 
             delta = chunk.choices[0].delta
 
+            # Reasoning / Thinking content (e.g., DeepSeek R1 via Ollama)
+            reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+            if reasoning:
+                yield StreamChunk(thinking=reasoning)
+
             # Text content
             if delta.content:
+                full_text += delta.content
                 yield StreamChunk(text=delta.content)
 
             # Tool calls (arrive incrementally)
@@ -299,6 +339,16 @@ class OpenAICompatibleProvider(LLMProvider):
                 name=tc_data["name"],
                 arguments=args,
             ))
+
+        # Estimate usage if missing
+        if not usage or (usage.prompt_tokens == 0 and usage.completion_tokens == 0):
+            try:
+                from unjess.context_manager import count_messages_tokens, count_tokens
+                prompt_tokens = count_messages_tokens(messages, model=model)
+                completion_tokens = count_tokens(full_text, model=model)
+                usage = Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+            except Exception as exc:
+                logger.debug("Failed to estimate streamed token usage: %s", exc)
 
         # Final done chunk
         yield StreamChunk(done=True, usage=usage)

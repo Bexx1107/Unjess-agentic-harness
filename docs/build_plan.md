@@ -517,4 +517,4 @@ Built into `agent.py` and `llm/*.py`, not a separate file.
 > - Estimates tightened after thinking through actual implementations
 
 > [!TIP]
-> **For future conversations**: Reference the [architecture doc](docs/architecture.md) and this build plan. Tell the agent: "I'm building Unjess. Here's the architecture doc and build plan. Execute Phase 2." The architecture doc has all the design details; this plan has the file-by-file execution order.
+> **For future conversations**: Reference the [architecture doc](architecture.md) and this build plan. Tell the agent: "I'm building Unjess. Here's the architecture doc and build plan. Execute Phase 2." The architecture doc has all the design details; this plan has the file-by-file execution order.

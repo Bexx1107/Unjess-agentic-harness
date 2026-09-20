@@ -29,6 +29,12 @@ if sys.platform == "win32":
 try:
     import nest_asyncio
     nest_asyncio.apply()
+    import asyncio
+    _orig_asyncio_run = asyncio.run
+    def _safe_asyncio_run(main, *args, **kwargs):
+        kwargs.pop("loop_factory", None)
+        return _orig_asyncio_run(main, *args, **kwargs)
+    asyncio.run = _safe_asyncio_run
 except ImportError:
     pass
 
@@ -214,6 +220,7 @@ def _run_repl(
                 ("openai", "Switch to OpenAI"),
                 ("anthropic", "Switch to Anthropic"),
                 ("ollama", "Switch to Ollama (local)"),
+                ("ollama-api", "Switch to Ollama API (cloud)"),
             ],
             "/undo": [
                 ("list", "List recent operations"),
@@ -417,12 +424,12 @@ def main() -> None:
     parser.add_argument(
         "-m", "--model",
         default=None,
-        help="Model to use (e.g. gpt-4o, claude-sonnet-4-20250514, gemini-2.5-flash)",
+        help="Model to use (e.g. gpt-4o, claude-sonnet-4-20250514, gemini-3.1-flash)",
     )
     parser.add_argument(
         "-p", "--provider",
         default=None,
-        help="Force a specific provider (openai, anthropic, google, ollama)",
+        help="Force a specific provider (openai, anthropic, google, ollama, ollama-api)",
     )
     parser.add_argument(
         "-w", "--workspace",
@@ -786,6 +793,17 @@ def _auto_summarize(
                         knowledge_graph.record_concept(topic)
                     for f in summary.files_modified:
                         knowledge_graph.record_file_write(f)
+                    
+                    # Sync persona traits to knowledge graph
+                    if memory_store:
+                        prof = memory_store.get_user_profile()
+                        if prof.role:
+                            knowledge_graph.record_user_fact("User", "has_role", prof.role, "user_trait", "user_trait")
+                        for tech in prof.tech_stack:
+                            knowledge_graph.record_user_fact("User", "uses_tech", tech, "user_trait", "tech_stack")
+                        for goal in prof.active_goals:
+                            knowledge_graph.record_user_fact("User", "pursues_goal", goal, "user_trait", "project_goal")
+
                     knowledge_graph.save()
                 except Exception as exc:
                     logger.debug("Knowledge graph save failed: %s", exc)

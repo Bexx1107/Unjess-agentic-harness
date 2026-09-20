@@ -92,7 +92,11 @@ class Agent:
         self._tools = tool_registry
         self._display = display
         self._permissions = permissions
-        self._context_manager = context_manager or ContextManager(settings.model)
+        self._context_manager = context_manager or ContextManager(
+            model=settings.model,
+            context_window_override=getattr(settings, "context_window_override", 0),
+            enable_compaction=getattr(settings, "enable_compaction", True),
+        )
         self._logger = conv_logger
         self._undo_manager = undo_manager
         self._mention_resolver = mention_resolver
@@ -129,9 +133,23 @@ class Agent:
         # --- Subagent Manager ---
         if not _is_child:
             self._init_subagent_manager(Path(settings.workspace))
+            self._init_scheduler()
         else:
             self._subagent_manager = None
+            self._scheduler = None
             self._custom_system_prompt: str = ""
+
+    def _init_scheduler(self) -> None:
+        """Initialize background scheduler and register native schedule tool."""
+        try:
+            from unjess.scheduler import Scheduler
+            from unjess.tools.schedule_tools import register_schedule_tools
+            self._scheduler = Scheduler()
+            self._scheduler.start()
+            register_schedule_tools(self._tools, self._scheduler)
+        except Exception as exc:
+            logger.warning("Failed to initialize scheduler: %s", exc)
+            self._scheduler = None
 
     def _init_subagent_manager(self, workspace: Path) -> None:
         """Initialize the subagent manager with built-in types and a factory."""
@@ -292,8 +310,9 @@ class Agent:
         if self._logger:
             self._logger.log_user_input(user_input)
 
-        # Reset abort flag at the start of each turn
+        # Reset abort flag and recent tool calls cache at start of each turn
         self._abort_requested = False
+        self._recent_tool_calls.clear()
 
         # Resolve @ mentions (inject file/git/dir context)
         enriched_input = user_input
@@ -329,16 +348,24 @@ class Agent:
 
         # Route the request — detect if this is a complex/planning task
         # Skip for child agents (they just execute, no planning)
-        if self._model_router and self._architect:
-            route = self._model_router.route(enriched_input)
-            self._planning_mode = self._architect.should_use(
-                route.task_type, route.complexity
-            )
-
-            if self._planning_mode:
-                self._display.show_info(
-                    f"Complex task detected ({route.task_type}/{route.complexity}) — planning mode active"
+        planning_setting = getattr(self._settings, "planning_mode", "auto")
+        if planning_setting == "on":
+            self._planning_mode = True
+            self._display.show_info("Planning mode active (forced by settings)")
+        elif planning_setting == "off":
+            self._planning_mode = False
+        else:
+            # Auto-detect
+            if self._model_router and self._architect:
+                route = self._model_router.route(enriched_input)
+                self._planning_mode = self._architect.should_use(
+                    route.task_type, route.complexity
                 )
+
+                if self._planning_mode:
+                    self._display.show_info(
+                        f"Complex task detected ({route.task_type}/{route.complexity}) — planning mode active"
+                    )
 
         # Build system prompt with all context (includes planning mode if active)
         system_prompt = self._build_full_system_prompt()
@@ -356,8 +383,13 @@ class Agent:
                 self._abort_requested = False
                 break
 
-            # Auto-compact if context is getting full
-            if self._context_manager.needs_compaction(system_prompt, self._conversation):
+            # Auto-compact if context is getting full (only at the start of a turn, and if enabled)
+            self._context_manager.enable_compaction = getattr(self._settings, "enable_compaction", True)
+            if (
+                iteration == 1
+                and self._context_manager.enable_compaction
+                and self._context_manager.needs_compaction(system_prompt, self._conversation)
+            ):
                 pre = self._context_manager.get_context_breakdown(
                     system_prompt, self._conversation
                 ).get("utilization_pct", 0)
@@ -621,6 +653,13 @@ class Agent:
                 f"Reached max iterations ({max_iter}). Stopping."
             )
 
+        # Save knowledge graph at the end of the turn
+        if self._knowledge_graph:
+            try:
+                self._knowledge_graph.save()
+            except Exception as exc:
+                logger.debug("Failed to save knowledge graph at end of turn: %s", exc)
+
     def clear_history(self) -> None:
         """Clear the conversation history."""
         self._conversation.clear()
@@ -763,6 +802,13 @@ class Agent:
             except Exception as exc:
                 logger.debug("Skill matching failed: %s", exc)
 
+        user_profile_context = ""
+        if self._memory_store:
+            try:
+                user_profile_context = self._memory_store.get_user_profile().to_context()
+            except Exception as exc:
+                logger.debug("Failed to get user profile context: %s", exc)
+
         # Detect if running in GUI mode
         _gui_mode = type(self._display).__name__ == "GUIDisplay"
 
@@ -776,6 +822,7 @@ class Agent:
             planning_mode=self._planning_mode,
             gui_mode=_gui_mode,
             skill_context=skill_context,
+            user_profile_context=user_profile_context,
         )
 
     # ------------------------------------------------------------------
@@ -789,14 +836,17 @@ class Agent:
         repetition. In goal mode, uses a higher threshold to allow
         more persistence.
         """
+        if not getattr(self._settings, "enable_stuck_detection", True):
+            return False
+
         window_size = _STUCK_WINDOW * 2 if self._goal_mode else _STUCK_WINDOW
         if len(self._recent_tool_calls) < window_size:
             return False
 
         window = list(self._recent_tool_calls)[-window_size:]
-        # Stuck if all calls in the window are identical
         unique_ratio = len(set(window)) / len(window)
-        return unique_ratio <= 0.2  # 80%+ identical = stuck
+        max_repeats = max(window.count(call) for call in set(window))
+        return unique_ratio <= 0.3 or max_repeats >= len(window)
 
     # ------------------------------------------------------------------
     # Internal
@@ -880,6 +930,47 @@ class Agent:
 
         # Append assistant message to conversation
         assistant_msg: dict[str, Any] = {"role": "assistant", "content": full_text}
+        
+        # Fallback for models that output raw JSON tool calls in text/thinking
+        if not tool_calls:
+            combined = full_thinking_text + "\n" + full_text
+            import uuid
+            # Try parsing line-by-line first (common for multiple raw tool calls)
+            for line in combined.splitlines():
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        parsed = json.loads(line)
+                        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                            tool_calls.append(
+                                ToolCall(
+                                    id=f"call_{uuid.uuid4().hex[:8]}",
+                                    name=parsed["name"],
+                                    arguments=parsed["arguments"] if isinstance(parsed["arguments"], dict) else {},
+                                )
+                            )
+                    except Exception:
+                        pass
+            
+            # If still nothing, try extracting any JSON object from the combined text
+            if not tool_calls and "{" in combined and "}" in combined:
+                try:
+                    import re
+                    # Look for { "name": ..., "arguments": ... }
+                    match = re.search(r'\{\s*"name"\s*:.*"arguments"\s*:.*\}', combined, re.DOTALL)
+                    if match:
+                        parsed = json.loads(match.group(0))
+                        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                            tool_calls.append(
+                                ToolCall(
+                                    id=f"call_{uuid.uuid4().hex[:8]}",
+                                    name=parsed["name"],
+                                    arguments=parsed["arguments"] if isinstance(parsed["arguments"], dict) else {},
+                                )
+                            )
+                except Exception:
+                    pass
+
         if tool_calls:
             assistant_msg["tool_calls"] = [
                 {
@@ -953,31 +1044,70 @@ class Agent:
 
             # Track for stuck detection
             call_sig = f"{tc.name}({json.dumps(tc.arguments, sort_keys=True)})"
+
+            # Duplicate read guard: block redundant re-reads of files/directories if repeated 2+ times in same turn
+            if tc.name in ("read_file", "view_file", "list_dir", "grep_search"):
+                recent_calls = list(self._recent_tool_calls)
+                if recent_calls.count(call_sig) >= 2:
+                    self._recent_tool_calls.append(call_sig)
+                    self._display.show_info(f"Notice: Redundant re-read skipped for {tc.name}")
+                    notice_result = (
+                        f"Notice: You have ALREADY executed '{tc.name}' with these arguments in the recent context. "
+                        "Do NOT re-read the same file repeatedly. Proceed directly to making necessary code edits or providing your final response."
+                    )
+                    self._conversation.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": tc.name,
+                        "content": notice_result,
+                    })
+                    continue
+
             self._recent_tool_calls.append(call_sig)
 
-            # Planning mode warning: warn (but don't block) write/edit on
-            # non-plan files when planning mode is active and no plan.md
-            # has been created yet.
-            planning_warning = ""
+            # Invalidate recent read signatures if writing to a file so updated contents can be read
+            if tc.name in ("write_file", "write_to_file", "edit_file", "create_file", "replace_file_content", "multi_replace_file_content"):
+                target_p = tc.arguments.get("path", tc.arguments.get("file_path", tc.arguments.get("TargetFile", "")))
+                if target_p:
+                    self._recent_tool_calls = deque(
+                        [sig for sig in self._recent_tool_calls if target_p not in sig],
+                        maxlen=_STUCK_WINDOW * 2,
+                    )
+
+            # Planning mode enforcement: block write/edit on non-plan files
+            # when planning mode is active and no plan.md has been created yet.
             if (
                 self._planning_mode
-                and tc.name in ("write_file", "edit_file", "create_file")
+                and tc.name in ("write_file", "edit_file", "create_file", "replace_file_content", "multi_replace_file_content", "write_to_file")
             ):
-                path = tc.arguments.get("path", "")
+                path = tc.arguments.get("path", tc.arguments.get("TargetFile", ""))
                 if not path.endswith("plan.md"):
                     # Check if plan.md exists in workspace
                     plan_path = Path(self._settings.workspace) / "plan.md"
                     if not plan_path.exists():
-                        planning_warning = (
-                            "⚠️ PLANNING MODE WARNING: You are writing files without "
-                            "creating plan.md first. You SHOULD create plan.md with "
-                            "your implementation plan and get user approval before "
-                            "writing code files. The write was allowed, but please "
-                            "create a plan next.\n\n"
-                        )
                         self._display.show_warning(
-                            "Planning mode: agent is writing files without a plan"
+                            "Planning mode: blocked write without a plan"
                         )
+                        result = (
+                            "Error: PLANNING MODE ENFORCEMENT - You must create 'plan.md' "
+                            "with your implementation plan and ask for user approval FIRST "
+                            "before modifying other files."
+                        )
+                        consecutive_errors += 1
+                        
+                        self._conversation.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": tc.name,
+                            "content": result,
+                        })
+                        
+                        if self._logger:
+                            self._logger.log_tool_result(tc.name, result, duration_ms=0)
+                            
+                        continue
+
+            planning_warning = ""
 
             start = time.monotonic()
             result = self._tools.execute(tc.name, tc.arguments)
@@ -1004,12 +1134,14 @@ class Agent:
             if self._knowledge_graph:
                 try:
                     args = tc.arguments
-                    if tc.name in ("read_file", "list_dir", "grep_search"):
-                        path = args.get("path", args.get("file_path", ""))
+                    # Read tools: read_file, view_file, list_dir, grep_search
+                    if tc.name in ("read_file", "view_file", "list_dir", "grep_search"):
+                        path = args.get("path", args.get("file_path", args.get("AbsolutePath", "")))
                         if path:
                             self._knowledge_graph.record_file_read(path)
-                    elif tc.name in ("write_file", "edit_file", "create_file"):
-                        path = args.get("path", args.get("file_path", ""))
+                    # Write tools: write_file, write_to_file, edit_file, create_file, replace_file_content, multi_replace_file_content
+                    elif tc.name in ("write_file", "write_to_file", "edit_file", "create_file", "replace_file_content", "multi_replace_file_content"):
+                        path = args.get("path", args.get("file_path", args.get("TargetFile", "")))
                         if path:
                             self._knowledge_graph.record_file_write(path)
                 except Exception as exc:
@@ -1017,10 +1149,10 @@ class Agent:
 
             # Register notable files as sidebar artifacts
             if (
-                tc.name in ("write_file", "create_file")
+                tc.name in ("write_file", "create_file", "write_to_file")
                 and not result.startswith("Error")
             ):
-                path = tc.arguments.get("path", tc.arguments.get("file_path", ""))
+                path = tc.arguments.get("path", tc.arguments.get("file_path", tc.arguments.get("TargetFile", "")))
                 if path and hasattr(self._display, "_register_artifact"):
                     self._display._register_artifact(path, tool_name=tc.name)
 
@@ -1032,14 +1164,36 @@ class Agent:
         consecutive_errors: int,
     ) -> int:
         """Execute read-only tool calls in parallel."""
-        # Show all tool calls up front
+        # Filter out redundant re-reads in parallel execution
+        valid_calls: list[ToolCall] = []
         for tc in tool_calls:
             self._display.show_tool_call(tc.name, tc.arguments)
             if self._logger:
                 self._logger.log_tool_call(tc.name, tc.arguments)
             call_sig = f"{tc.name}({json.dumps(tc.arguments, sort_keys=True)})"
-            self._recent_tool_calls.append(call_sig)
 
+            recent_calls = list(self._recent_tool_calls)
+            if tc.name in ("read_file", "view_file", "list_dir", "grep_search") and recent_calls.count(call_sig) >= 2:
+                self._recent_tool_calls.append(call_sig)
+                self._display.show_info(f"Notice: Redundant parallel re-read skipped for {tc.name}")
+                notice_result = (
+                    f"Notice: You have ALREADY executed '{tc.name}' with these arguments in the recent context. "
+                    "Do NOT re-read the same file repeatedly. Proceed directly to making necessary code edits or providing your final response."
+                )
+                self._conversation.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "name": tc.name,
+                    "content": notice_result,
+                })
+            else:
+                self._recent_tool_calls.append(call_sig)
+                valid_calls.append(tc)
+
+        if not valid_calls:
+            return consecutive_errors
+
+        tool_calls = valid_calls
         self._display.show_info(f"Running {len(tool_calls)} tools in parallel...")
 
         results: dict[str, tuple[str, int]] = {}  # tc.id -> (result, duration_ms)
@@ -1156,7 +1310,7 @@ class Agent:
                 if options:
                     return input_handler.ask_question(question, options)
                 else:
-                    return input_handler.get_user_input(f"❓ {question}: ")
+                    return "Error: You called ask_question without any options. For open-ended questions, DO NOT use this tool. Just output your question as normal conversational text instead!"
 
             # Fallback: terminal mode via prompt_toolkit
             from prompt_toolkit import prompt as pt_prompt
@@ -1200,7 +1354,9 @@ class Agent:
             name="ask_question",
             description=(
                 "Ask the user a question to clarify requirements or get a decision. "
-                "Optionally provide numbered options for the user to choose from."
+                "Optionally provide numbered options for the user to choose from. "
+                "CRITICAL: DO NOT use this tool for general conversational questions "
+                "(e.g. 'How can I help you?'). For normal conversation, just output text directly!"
             ),
             parameters={
                 "type": "object",

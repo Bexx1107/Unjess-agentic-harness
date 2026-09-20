@@ -18,10 +18,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from nicegui import ui
+from nicegui import app, ui
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from unjess.config import Settings
@@ -33,12 +36,30 @@ log = logging.getLogger(__name__)
 # In-memory cache so switching providers is instant after the first fetch
 _model_cache: dict[str, list[str]] = {}
 
+
 # ── Provider & key constants ──────────────────────────────────────────────
 
 PROVIDERS: list[str] = [
     "google", "openai", "anthropic", "groq",
-    "mistral", "xai", "openrouter", "cerebras", "ollama",
+    "mistral", "xai", "openrouter", "cerebras", "kimi", "qwen", "ollama", "ollama-api", "lmstudio", "llamacpp",
 ]
+
+PROVIDER_LABELS: dict[str, str] = {
+    "google": "Google",
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "groq": "Groq",
+    "mistral": "Mistral",
+    "xai": "xAI (Grok)",
+    "openrouter": "OpenRouter",
+    "cerebras": "Cerebras",
+    "kimi": "Kimi (Moonshot)",
+    "qwen": "Qwen (DashScope)",
+    "ollama": "Ollama",
+    "ollama-api": "Ollama API",
+    "lmstudio": "LM Studio",
+    "llamacpp": "llama.cpp",
+}
 
 API_KEY_ENV_NAMES: dict[str, str] = {
     "google": "GOOGLE_API_KEY",
@@ -49,6 +70,9 @@ API_KEY_ENV_NAMES: dict[str, str] = {
     "xai": "XAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "cerebras": "CEREBRAS_API_KEY",
+    "kimi": "MOONSHOT_API_KEY",
+    "qwen": "DASHSCOPE_API_KEY",
+    "ollama-api": "OLLAMA_API_KEY",
 }
 
 _MCP_PATH = Path.home() / ".unjess" / "mcp.json"
@@ -91,9 +115,9 @@ def _truncate_model(name: str, max_len: int = 28) -> str:
     return name[:max_len - 2] + "…"
 
 
-def _fetch_models_sync(router: "ProviderRouter", provider_name: str) -> list[str]:
+def _fetch_models_sync(router: "ProviderRouter", provider_name: str, force_refresh: bool = False) -> list[str]:
     """Fetch model list from the router (blocking). Uses an in-memory cache."""
-    if provider_name in _model_cache:
+    if not force_refresh and provider_name in _model_cache and _model_cache[provider_name]:
         return _model_cache[provider_name]
 
     models: list[str] = []
@@ -107,17 +131,25 @@ def _fetch_models_sync(router: "ProviderRouter", provider_name: str) -> list[str
         except Exception:
             log.debug("list_all_models also failed for %s", provider_name)
 
+    if not models:
+        try:
+            from unjess.first_run import _PROVIDER_MODELS
+            if provider_name in _PROVIDER_MODELS:
+                models = [m[0] for m in _PROVIDER_MODELS[provider_name]]
+        except Exception:
+            pass
+
     if models:
         _model_cache[provider_name] = models
     return models
 
 
-async def _fetch_models_async(router: "ProviderRouter", provider_name: str) -> list[str]:
+async def _fetch_models_async(router: "ProviderRouter", provider_name: str, force_refresh: bool = False) -> list[str]:
     """Fetch model list in a background thread so the UI stays responsive."""
-    if provider_name in _model_cache:
+    if not force_refresh and provider_name in _model_cache and _model_cache[provider_name]:
         return _model_cache[provider_name]
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _fetch_models_sync, router, provider_name)
+    return await loop.run_in_executor(None, _fetch_models_sync, router, provider_name, force_refresh)
 
 
 def _load_mcp_config() -> dict[str, dict]:
@@ -145,6 +177,7 @@ def create_settings_dialog(
     settings: "Settings",
     state: "AppState",
     router: "ProviderRouter",
+    agent: "Agent" = None,
 ) -> ui.dialog:
     """Create a scrollable settings dialog with all config options.
 
@@ -170,28 +203,33 @@ def create_settings_dialog(
             "enabled": cfg.get("enabled", True),
         })
 
+    # Get existing DMD Studio token for display in the API keys section
+    dmd_studio_cfg = mcp_servers_raw.get("dmd-studio", {})
+    dmd_env = dmd_studio_cfg.get("env", {})
+    existing_dmd_token = dmd_env.get("DMD_STUDIO_TOKEN", "")
+
     # ── Build dialog ──────────────────────────────────────────────────
     with ui.dialog() as dialog:
         with ui.card().classes(
             "max-w-none flex flex-col"
-        ).style("width: 80vw; height: 80vh; background: #0a0a0a"):
+        ).style("width: 95vw; max-width: 800px; height: 85vh; background: #0a0a0a"):
             # ── Header ────────────────────────────────────────────────
             with ui.row().classes(
-                "w-full no-wrap items-center px-6 py-3 "
+                "w-full no-wrap items-center px-4 sm:px-6 py-3 "
                 "border-b border-gray-800 shrink-0"
             ):
-                ui.icon("settings", size="20px").classes("text-violet-500")
+                ui.icon("settings", size="20px").classes("text-white")
                 ui.label("Settings").classes(
                     "text-base font-semibold text-gray-200 ml-2"
                 )
                 ui.element("div").classes("flex-grow")
                 ui.button(icon="close", on_click=dialog.close).props(
                     "flat round dense"
-                ).classes("text-gray-600")
+                ).classes("text-gray-400")
 
             # ── Scrollable body ───────────────────────────────────────
             with ui.scroll_area().classes("flex-grow w-full"):
-                with ui.column().classes("w-full px-6 py-2 gap-0"):
+                with ui.column().classes("w-full px-3 sm:px-6 py-2 gap-0"):
 
                     # ==========================================================
                     # (a) MODEL & PROVIDER
@@ -204,19 +242,19 @@ def create_settings_dialog(
 
                     provider_select = ui.select(
                         label="Provider",
-                        options=PROVIDERS,
-                        value=initial_provider,
-                    ).props("outlined dense dark").classes("w-full")
+                        options=PROVIDER_LABELS,
+                        value=initial_provider if initial_provider in PROVIDER_LABELS else "google",
+                    ).props("outlined dense dark").classes("w-full mb-2")
 
                     model_select = ui.select(
                         label="Model",
                         options=initial_models or [settings.model] if settings.model else [],
                         value=settings.model,
                         with_input=True,
-                    ).props("outlined dense dark").classes("w-full")
+                    ).props("outlined dense dark").classes("w-full mb-2")
 
                     model_loading = ui.label("Loading models...").classes(
-                        "text-xs text-gray-500 italic"
+                        "text-xs text-gray-500 italic mb-2"
                     )
                     model_loading.set_visibility(not initial_models)
 
@@ -228,13 +266,17 @@ def create_settings_dialog(
                         except Exception:
                             models = []
                         model_loading.set_visibility(False)
+
                         model_select.options = models
                         if models and model_select.value not in models:
-                            # Keep current value if it's valid, otherwise pick first
                             if settings.model in models:
                                 model_select.value = settings.model
                             else:
                                 model_select.value = models[0]
+                        elif not models:
+                            if settings.model:
+                                model_select.options = [settings.model]
+                                model_select.value = settings.model
                         model_select.update()
 
                     async def _on_provider_change(_e: object) -> None:
@@ -248,9 +290,19 @@ def create_settings_dialog(
                         asyncio.ensure_future(_populate_models(initial_provider))
 
                     ollama_input = ui.input(
-                        label="Ollama Base URL",
+                        label="Ollama Base URL (Local)",
                         value=settings.ollama_base_url,
-                    ).props("outlined dense dark").classes("w-full")
+                    ).props("outlined dense dark").classes("w-full mb-2")
+
+                    ollama_api_input = ui.input(
+                        label="Ollama API Base URL (Cloud)",
+                        value=getattr(settings, "ollama_api_base_url", "https://api.ollama.com"),
+                    ).props("outlined dense dark").classes("w-full mb-2")
+
+                    lmstudio_input = ui.input(
+                        label="LM Studio Base URL",
+                        value=getattr(settings, "lmstudio_base_url", "http://localhost:1234"),
+                    ).props("outlined dense dark").classes("w-full mb-4")
 
                     # ==========================================================
                     # (b) API KEYS
@@ -260,27 +312,45 @@ def create_settings_dialog(
                     key_inputs: dict[str, ui.input] = {}
                     for prov, env_name in API_KEY_ENV_NAMES.items():
                         existing = settings.api_keys.get(prov, "")
-                        hint = f"Env: {env_name}"
-                        if existing:
-                            hint += f"  •  Current: {_mask_key(existing)}"
+                        if prov == "ollama-api" and not existing:
+                            existing = settings.api_keys.get("ollama", "")
+                        label_name = "Ollama API" if prov == "ollama-api" else prov.title()
                         inp = ui.input(
-                            label=f"{prov.title()} API Key",
+                            label=f"{label_name} Key",
                             value=existing,
                             password=True,
                             password_toggle_button=True,
-                        ).props(f'outlined dense dark hint="{hint}"').classes("w-full")
+                        ).props("outlined dense dark").classes("w-full mt-1")
                         key_inputs[prov] = inp
 
+                        hint = f"Env: {env_name}"
+                        if existing:
+                            hint += f"  •  Current: {_mask_key(existing)}"
+                        ui.label(hint).classes("text-xs text-gray-500 break-all mb-3 pl-1")
+
+                    # DMD Studio Token field
+                    dmd_token_input = ui.input(
+                        label="DMD Studio Token",
+                        value=existing_dmd_token,
+                        password=True,
+                        password_toggle_button=True,
+                    ).props("outlined dense dark").classes("w-full mt-1")
+
+                    dmd_hint = "Env: DMD_STUDIO_TOKEN (stored in mcp.json)"
+                    if existing_dmd_token:
+                        dmd_hint += f"  •  Current: {_mask_key(existing_dmd_token)}"
+                    ui.label(dmd_hint).classes("text-xs text-gray-500 break-all mb-3 pl-1")
+
                     ui.label(
-                        "Ollama does not require an API key."
-                    ).classes("text-xs text-gray-500 -mt-1")
+                        "Ollama (Local) runs on your machine for free without a key. Ollama API connects to Ollama cloud models using your subscription API key."
+                    ).classes("text-xs text-gray-500 -mt-1 mb-4")
 
                     # ==========================================================
                     # (c) BEHAVIOR
                     # ==========================================================
                     _section_header("BEHAVIOR")
 
-                    with ui.row().classes("w-full gap-4"):
+                    with ui.column().classes("w-full gap-3 sm:flex-row sm:gap-4"):
                         max_iter_input = ui.number(
                             label="Max iterations per turn",
                             value=settings.max_iterations,
@@ -297,6 +367,31 @@ def create_settings_dialog(
                         "Confirm before running commands",
                         value=settings.confirm_commands,
                     ).classes("text-gray-400")
+
+                    planning_mode_select = ui.select(
+                        label="Planning Mode",
+                        options=["auto", "on", "off"],
+                        value=getattr(settings, "planning_mode", "auto"),
+                    ).props("outlined dense dark").classes("w-full mt-2")
+                    ui.label(
+                        "Auto: plan on complex tasks; On: always plan; Off: never plan."
+                    ).classes("text-xs text-gray-500 -mt-1")
+
+                    compaction_toggle = ui.switch(
+                        "Enable context auto-compaction",
+                        value=getattr(settings, "enable_compaction", True),
+                    ).classes("text-gray-400 mt-2")
+
+                    stuck_detection_toggle = ui.switch(
+                        "Enable repeating action stuck detection",
+                        value=getattr(settings, "enable_stuck_detection", True),
+                    ).classes("text-gray-400 mt-2")
+
+                    context_override_input = ui.number(
+                        label="Context size override (0 = auto-detect)",
+                        value=getattr(settings, "context_window_override", 0),
+                        min=0, max=10000000, step=1024,
+                    ).props("outlined dense dark").classes("w-full mt-2")
 
                     # ==========================================================
                     # (d) DISPLAY
@@ -425,6 +520,61 @@ def create_settings_dialog(
                         "Uses free-tier providers to avoid costs. "
                         "May have rate limits and lower quality."
                     ).classes("text-xs text-gray-500 -mt-1")
+
+                    # ==========================================================
+                    # (f2) MOBILE COMPANION & PWA
+                    # ==========================================================
+                    _section_header("MOBILE COMPANION & PWA")
+
+                    import socket
+                    try:
+                        _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        _s.connect(("8.8.8.8", 80))
+                        _local_ip = _s.getsockname()[0]
+                        _s.close()
+                    except Exception:
+                        try:
+                            _local_ip = socket.gethostbyname(socket.gethostname())
+                        except Exception:
+                            _local_ip = "192.168.x.x"
+
+                    _mobile_url = f"http://{_local_ip}:{getattr(settings, 'network_port', 8080)}"
+
+                    network_toggle = ui.switch(
+                        "Allow local network access (bind 0.0.0.0)",
+                        value=getattr(settings, "allow_network_access", True),
+                    ).classes("text-gray-400")
+
+                    pin_auth_toggle = ui.switch(
+                        "Require 4-digit PIN for remote mobile connections",
+                        value=getattr(settings, "enable_pin_auth", False),
+                    ).classes("text-gray-400")
+
+                    mobile_pin_input = ui.input(
+                        label="Mobile 4-Digit PIN (optional)",
+                        placeholder="e.g. 1234",
+                        value=getattr(settings, "mobile_pin", ""),
+                    ).classes("w-full")
+
+                    with ui.card().classes("w-full bg-[#1e1e24] border border-gray-800 p-3 rounded-lg mt-2 flex flex-col gap-2"):
+                        ui.label("📱 Scan to Connect from Smartphone").classes("text-xs font-semibold text-white")
+                        ui.label(f"Mobile PWA URL: {_mobile_url}").classes("text-xs text-gray-300 font-mono")
+                        ui.label("Open this URL on your phone's browser or scan QR code to install Unjess as a Mobile App.").classes("text-xs text-gray-500")
+
+                        # Lightweight QR Code canvas renderer
+                        _qr_api_url = f"https://api.qrserver.com/v1/create-qr-code/?size=160x160&data={_mobile_url}&color=ffffff&bgcolor=1e1e24"
+                        ui.image(_qr_api_url).classes("w-32 h-32 self-center rounded border border-gray-700 my-1")
+
+                    # ==========================================================
+                    # (g) SCHEDULED TASKS & AUTOMATION
+                    # ==========================================================
+                    try:
+                        from unjess.gui.components.schedule_dashboard import render_schedule_dashboard
+                        from unjess.scheduler import Scheduler
+                        _sched_inst = getattr(app.storage.user, "scheduler", None) or Scheduler()
+                        render_schedule_dashboard(_sched_inst)
+                    except Exception as exc:
+                        logger.error("Failed to render Schedule Dashboard: %s", exc)
 
                     # ==========================================================
                     # (g) RAG
@@ -572,7 +722,7 @@ def create_settings_dialog(
                     ).props("outlined dense dark").classes("w-full")
                     ui.label(
                         'e.g. "groq/llama-3.3-70b-versatile, '
-                        'google/gemini-2.5-flash"'
+                        'google/gemini-3.1-flash"'
                     ).classes("text-xs text-gray-500 -mt-1")
 
                     # ==========================================================
@@ -715,7 +865,7 @@ def create_settings_dialog(
                                 from pathlib import Path
                                 mcp_json = Path.home() / ".unjess" / "mcp.json"
                                 if mcp_json.exists():
-                                    mgr = ServerManager(config_path=mcp_json)
+                                    mgr = ServerManager(config_path=mcp_json, workspace_dir=Path(settings.workspace) if settings.workspace else None)
                                     # Connect to all enabled servers
                                     mgr.connect_all()
                                     connected = mgr.connected_servers
@@ -873,11 +1023,12 @@ def create_settings_dialog(
                                                     if col == "Model"
                                                     else "text-align: right;"
                                                 )
-                                                ui.element("th").text(col).style(
+                                                with ui.element("th").style(
                                                     f"padding: 6px 8px; color: #9ca3af; "
                                                     f"font-weight: 600; border-bottom: "
                                                     f"1px solid #333; {_align}"
-                                                )
+                                                ):
+                                                    ui.label(col)
 
                                     # Body
                                     with ui.element("tbody"):
@@ -887,51 +1038,45 @@ def create_settings_dialog(
                                                 "border-bottom: 1px solid #1f1f1f;"
                                             ):
                                                 # Model name
-                                                ui.element("td").text(
-                                                    _truncate_model(model_name)
-                                                ).style(
+                                                with ui.element("td").style(
                                                     "padding: 5px 8px; color: #d1d5db; "
                                                     "white-space: nowrap;"
-                                                )
+                                                ):
+                                                    ui.label(_truncate_model(model_name))
                                                 # Calls
-                                                ui.element("td").text(
-                                                    str(mdata.get("calls", 0))
-                                                ).style(
+                                                with ui.element("td").style(
                                                     "padding: 5px 8px; color: #9ca3af; "
                                                     "text-align: right;"
-                                                )
+                                                ):
+                                                    ui.label(str(mdata.get("calls", 0)))
                                                 # Tokens In
-                                                ui.element("td").text(
-                                                    f"{mdata.get('tokens_in', 0):,}"
-                                                ).style(
+                                                with ui.element("td").style(
                                                     "padding: 5px 8px; color: #6ee7b7; "
                                                     "text-align: right; font-family: monospace;"
-                                                )
+                                                ):
+                                                    ui.label(f"{mdata.get('tokens_in', 0):,}")
                                                 # Tokens Out
-                                                ui.element("td").text(
-                                                    f"{mdata.get('tokens_out', 0):,}"
-                                                ).style(
+                                                with ui.element("td").style(
                                                     "padding: 5px 8px; color: #93c5fd; "
                                                     "text-align: right; font-family: monospace;"
-                                                )
+                                                ):
+                                                    ui.label(f"{mdata.get('tokens_out', 0):,}")
                                                 # Thinking (optional)
                                                 if has_thinking:
                                                     t = mdata.get("thinking_tokens", 0)
-                                                    ui.element("td").text(
-                                                        f"{t:,}" if t else "—"
-                                                    ).style(
+                                                    with ui.element("td").style(
                                                         "padding: 5px 8px; color: #c4b5fd; "
                                                         "text-align: right; font-family: monospace;"
-                                                    )
+                                                    ):
+                                                        ui.label(f"{t:,}" if t else "—")
                                                 # Cache (optional)
                                                 if has_cache:
                                                     c = mdata.get("cache_read_tokens", 0)
-                                                    ui.element("td").text(
-                                                        f"{c:,}" if c else "—"
-                                                    ).style(
+                                                    with ui.element("td").style(
                                                         "padding: 5px 8px; color: #fdba74; "
                                                         "text-align: right; font-family: monospace;"
-                                                    )
+                                                    ):
+                                                        ui.label(f"{c:,}" if c else "—")
                                                 # Cost
                                                 if is_free:
                                                     with ui.element("td").style(
@@ -945,12 +1090,194 @@ def create_settings_dialog(
                                                         )
                                                 else:
                                                     cost = mdata.get("cost", 0)
-                                                    ui.element("td").text(
-                                                        f"${cost:.4f}"
-                                                    ).style(
+                                                    with ui.element("td").style(
                                                         "padding: 5px 8px; color: #fbbf24; "
                                                         "text-align: right; font-family: monospace;"
-                                                    )
+                                                    ):
+                                                        ui.label(f"${cost:.4f}")
+
+                    # ==========================================================
+                    # (l) SKILLS MANAGEMENT
+                    # ==========================================================
+                    _section_header("SKILLS")
+
+                    skills_container = ui.column().classes("w-full gap-2 mt-2")
+
+                    def _load_and_render_skills():
+                        skills_container.clear()
+                        skills = []
+                        if agent and hasattr(agent, "_skill_engine") and agent._skill_engine:
+                            skills = agent._skill_engine.skills
+
+                        with skills_container:
+                            if not skills:
+                                ui.label("No custom skills discovered.").classes("text-xs text-gray-500 py-1")
+                            else:
+                                for skill in skills:
+                                    # Create card for each skill
+                                    with ui.card().classes("w-full p-3 gap-1").style(
+                                        "background: #121212; border: 1px solid #222; border-radius: 8px;"
+                                    ):
+                                        with ui.row().classes("w-full items-center no-wrap"):
+                                            ui.label(skill.name).classes("text-sm font-bold text-violet-400")
+                                            # Display scope / type
+                                            is_workspace = ".agents" in str(skill.path)
+                                            scope_label = "Workspace" if is_workspace else "Global"
+                                            scope_color = "#3b82f6" if is_workspace else "#8b5cf6"
+                                            ui.label(scope_label).classes("text-[10px] px-1.5 py-0.5 rounded font-semibold").style(
+                                                f"background: {scope_color}22; color: {scope_color};"
+                                            )
+                                            ui.element("div").classes("flex-grow")
+                                            
+                                            # Actions
+                                            def make_edit_handler(s=skill):
+                                                return lambda _e: _edit_skill(s)
+                                            def make_delete_handler(s=skill):
+                                                return lambda _e: _delete_skill(s)
+
+                                            ui.button(icon="edit", on_click=make_edit_handler(skill)).props("flat round dense").classes("text-blue-400 w-7 h-7").tooltip("Edit Skill")
+                                            ui.button(icon="delete", on_click=make_delete_handler(skill)).props("flat round dense").classes("text-red-400 w-7 h-7").tooltip("Delete Skill")
+                                        
+                                        ui.label(skill.description).classes("text-xs text-gray-400 line-clamp-2")
+                                        if skill.trigger_patterns:
+                                            ui.label(f"Triggers: {', '.join(skill.trigger_patterns)}").classes("text-[10px] text-gray-500 font-mono")
+
+                    def _delete_skill(skill):
+                        with ui.dialog() as d, ui.card().style("background: #1a1a1a; border: 1px solid #333;"):
+                            ui.label(f"Delete skill '{skill.name}'?").classes("text-sm font-bold text-gray-300")
+                            ui.label("This will permanently remove the skill files from disk.").classes("text-xs text-gray-500")
+                            with ui.row().classes("w-full justify-end gap-2 mt-3"):
+                                ui.button("Cancel", on_click=d.close).props("flat dense no-caps").classes("text-gray-500")
+                                def _do_delete():
+                                    try:
+                                        import shutil
+                                        if skill.path.is_dir():
+                                            shutil.rmtree(skill.path)
+                                        else:
+                                            skill.path.unlink()
+                                        if agent and agent._skill_engine:
+                                            agent._skill_engine.discover()
+                                        _load_and_render_skills()
+                                        ui.notify(f"Skill '{skill.name}' deleted", type="positive", position="top")
+                                    except Exception as exc:
+                                        ui.notify(f"Delete failed: {exc}", type="negative", position="top")
+                                    d.close()
+                                ui.button("Delete", on_click=_do_delete).props("unelevated dense no-caps").classes("bg-red-500 text-white")
+                        d.open()
+
+                    def _edit_skill(skill):
+                        _show_skill_form(skill)
+
+                    def _add_skill():
+                        _show_skill_form(None)
+
+                    def _show_skill_form(skill=None):
+                        is_edit = skill is not None
+                        title = f"Edit Skill: {skill.name}" if is_edit else "Add New Skill"
+                        
+                        # Load instructions text
+                        initial_instr = ""
+                        initial_triggers = ""
+                        initial_desc = ""
+                        initial_name = ""
+                        initial_scope = "Global"
+                        
+                        if is_edit:
+                            initial_name = skill.name
+                            initial_desc = skill.description
+                            initial_triggers = ", ".join(skill.trigger_patterns)
+                            is_workspace = ".agents" in str(skill.path)
+                            initial_scope = "Workspace" if is_workspace else "Global"
+                            if agent and agent._skill_engine:
+                                raw_instr = agent._skill_engine.load(skill.name) or ""
+                                initial_instr = re.sub(r'^---\s*\n.*?\n---\s*\n?', '', raw_instr, flags=re.DOTALL).strip()
+
+                        with ui.dialog() as form_dialog, ui.card().classes("w-[500px] max-w-none").style("background: #121212; border: 1px solid #333;"):
+                            ui.label(title).classes("text-sm font-bold text-violet-400 mb-2")
+                            
+                            name_input = ui.input("Name", value=initial_name).props("outlined dense dark").classes("w-full mb-2")
+                            if is_edit:
+                                name_input.props("readonly")
+                            
+                            desc_input = ui.input("Description", value=initial_desc).props("outlined dense dark").classes("w-full mb-2")
+                            triggers_input = ui.input("Triggers (comma separated)", value=initial_triggers).props("outlined dense dark").classes("w-full mb-2")
+                            
+                            scope_select = ui.select(
+                                label="Scope",
+                                options=["Global", "Workspace"],
+                                value=initial_scope
+                            ).props("outlined dense dark").classes("w-full mb-2")
+                            if is_edit:
+                                scope_select.props("readonly")
+                                
+                            instr_input = ui.textarea(
+                                label="Instructions (Markdown)",
+                                value=initial_instr
+                            ).props("outlined dense dark").classes("w-full h-48 font-mono mb-3")
+                            
+                            with ui.row().classes("w-full justify-end gap-2"):
+                                ui.button("Cancel", on_click=form_dialog.close).props("flat dense no-caps").classes("text-gray-500")
+                                
+                                def _save():
+                                    name = (name_input.value or "").strip()
+                                    desc = (desc_input.value or "").strip()
+                                    triggers_raw = (triggers_input.value or "").strip()
+                                    scope = scope_select.value
+                                    raw_instr = instr_input.value or ""
+                                    clean_instr = re.sub(r'^---\s*\n.*?\n---\s*\n?', '', raw_instr, flags=re.DOTALL).strip()
+                                    
+                                    if not name or not desc or not clean_instr:
+                                        ui.notify("Name, Description, and Instructions are required", type="warning")
+                                        return
+                                        
+                                    triggers = [t.strip() for t in triggers_raw.split(",") if t.strip()]
+                                    
+                                    # Form SKILL.md content
+                                    import yaml
+                                    frontmatter = {
+                                        "name": name,
+                                        "description": desc,
+                                    }
+                                    if triggers:
+                                        frontmatter["triggers"] = triggers
+                                        
+                                    yaml_block = yaml.dump(frontmatter, sort_keys=False).strip()
+                                    file_content = f"---\n{yaml_block}\n---\n\n{clean_instr}"
+                                    
+                                    try:
+                                        # Determine path
+                                        if is_edit:
+                                            target_dir = skill.path if skill.path.is_dir() else skill.path.parent
+                                        else:
+                                            ws_path = settings.workspace or "."
+                                            if scope == "Workspace":
+                                                target_dir = Path(ws_path) / ".agents" / "skills" / name
+                                            else:
+                                                target_dir = Path.home() / ".unjess" / "skills" / name
+                                        
+                                        target_dir.mkdir(parents=True, exist_ok=True)
+                                        skill_md = target_dir / "SKILL.md"
+                                        skill_md.write_text(file_content, encoding="utf-8")
+                                        
+                                        if agent and agent._skill_engine:
+                                            # Add root if not exists
+                                            agent._skill_engine.add_root(target_dir.parent)
+                                            agent._skill_engine.discover()
+                                            
+                                        _load_and_render_skills()
+                                        ui.notify(f"Skill '{name}' saved successfully", type="positive", position="top")
+                                        form_dialog.close()
+                                    except Exception as exc:
+                                        ui.notify(f"Save failed: {exc}", type="negative", position="top")
+                                        
+                                ui.button("Save", on_click=_save).props("unelevated dense no-caps").classes("bg-violet-600 text-white")
+                        form_dialog.open()
+
+                    ui.button("Add Custom Skill", icon="add", on_click=_add_skill).props(
+                        "flat dense no-caps"
+                    ).classes("text-violet-400 mt-1")
+
+                    _load_and_render_skills()
 
             # ── Footer ────────────────────────────────────────────────
             with ui.row().classes(
@@ -969,21 +1296,39 @@ def create_settings_dialog(
 
                     # (a) Model & Provider
                     settings.provider = provider_select.value or ""
-                    settings.model = model_select.value or ""
+                    # Safeguard settings.model from being overwritten with empty string
+                    new_model = model_select.value or ""
+                    if new_model:
+                        settings.model = new_model
+                    elif not settings.model:
+                        settings.model = "gemini-3.1-flash"
                     settings.ollama_base_url = (
                         ollama_input.value or "http://localhost:11434"
                     )
+                    settings.ollama_api_base_url = (
+                        ollama_api_input.value or "https://api.ollama.com"
+                    )
+                    settings.lmstudio_base_url = (
+                        lmstudio_input.value or "http://localhost:1234"
+                    ).strip()
 
                     # (b) API Keys
                     for prov, inp in key_inputs.items():
                         val = (inp.value or "").strip()
                         if val:
                             settings.api_keys[prov] = val
+                        elif prov in settings.api_keys:
+                            # Allow user to clear their key
+                            del settings.api_keys[prov]
 
                     # (c) Behavior
                     settings.max_iterations = int(max_iter_input.value or 50)
                     settings.command_timeout = int(cmd_timeout_input.value or 30)
                     settings.confirm_commands = confirm_toggle.value
+                    settings.planning_mode = planning_mode_select.value or "auto"
+                    settings.enable_compaction = compaction_toggle.value
+                    settings.enable_stuck_detection = stuck_detection_toggle.value
+                    settings.context_window_override = int(context_override_input.value or 0)
 
                     # (d) Display
                     settings.verbosity = verbosity_select.value or "normal"
@@ -1002,6 +1347,11 @@ def create_settings_dialog(
 
                     # (f) Free Mode
                     settings.free_mode_enabled = free_toggle.value
+
+                    # (f2) Mobile Companion
+                    settings.allow_network_access = network_toggle.value
+                    settings.enable_pin_auth = pin_auth_toggle.value
+                    settings.mobile_pin = (mobile_pin_input.value or "").strip()
 
                     # (g) RAG
                     settings.enable_rag = rag_toggle.value
@@ -1024,6 +1374,7 @@ def create_settings_dialog(
                     # (i) MCP Servers — build dict and write separately
                     mcp_out: dict[str, dict] = {}
                     _mcp_warnings: list[str] = []
+                    new_dmd_token = dmd_token_input.value.strip()
                     for row in mcp_rows:
                         name = row["name"].strip()
                         if not name:
@@ -1038,12 +1389,20 @@ def create_settings_dialog(
                         args_list = [
                             a.strip() for a in args_str.split(",") if a.strip()
                         ] if args_str else []
+                        
+                        env = row.get("env", {})
+                        if name == "dmd-studio" and new_dmd_token:
+                            env["DMD_STUDIO_TOKEN"] = new_dmd_token
+                            
                         mcp_out[name] = {
                             "command": cmd,
                             "args": args_list,
-                            "env": row.get("env", {}),
+                            "env": env,
                             "enabled": row["enabled"],
                         }
+                    # Also make sure we update it if dmd-studio was not modified in rows but is in mcp_out
+                    if "dmd-studio" in mcp_out and new_dmd_token:
+                        mcp_out["dmd-studio"]["env"]["DMD_STUDIO_TOKEN"] = new_dmd_token
                     _save_mcp_config(mcp_out)
                     for _w in _mcp_warnings:
                         ui.notify(_w, type="warning", position="top-right")

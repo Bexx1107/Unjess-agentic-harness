@@ -55,6 +55,15 @@ class TestResolveSafe:
         result = _resolve_safe(".", tmp_workspace)
         assert result == tmp_workspace.resolve()
 
+    def test_fuzzy_unicode_ellipsis_matching(self, tmp_workspace: Path) -> None:
+        _reset_file_tools_globals(tmp_workspace)
+        real_file = tmp_workspace / "File With…Ellipsis.csv"
+        real_file.write_text("hello", encoding="utf-8")
+        # Try resolving path with ASCII dot instead of unicode ellipsis
+        ascii_path = str(tmp_workspace / "File With.Ellipsis.csv")
+        result = _resolve_safe(ascii_path, tmp_workspace)
+        assert result == real_file.resolve()
+
     def test_outside_workspace_denied_no_permissions(self, tmp_workspace: Path) -> None:
         _reset_file_tools_globals(tmp_workspace)
         with pytest.raises(PermissionError, match="outside the workspace"):

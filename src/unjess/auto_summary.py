@@ -14,17 +14,29 @@ from unjess.memory import ConversationSummary, MemoryStore
 
 logger = logging.getLogger(__name__)
 
-_SUMMARY_PROMPT = """Summarize this coding session in 3-5 sentences. Include:
+_SUMMARY_PROMPT = """Summarize this coding session in 3-5 sentences and extract user persona facts.
+
+Include in your summary:
 1. What the user wanted to accomplish
 2. Key changes made (files, features)
 3. Any important decisions or patterns established
 
-Keep it concise — this summary will be injected into future sessions as context.
+At the end of your response, include a JSON block with any newly learned facts about the user or project:
+```json
+{{
+  "summary": "...",
+  "user_role": "...",
+  "tech_stack": ["..."],
+  "active_goals": ["..."],
+  "preferences": ["..."],
+  "triples": [
+    {{"subject": "...", "relation": "...", "target": "...", "subject_type": "user_trait", "target_type": "tech_stack"}}
+  ]
+}}
+```
 
 Conversation:
-{conversation}
-
-Respond with ONLY the summary text, no headers or formatting."""
+{conversation}"""
 
 
 def _extract_heuristic_summary(
@@ -146,13 +158,26 @@ def generate_summary(
     
     # Try LLM summary
     summary_text = ""
+    json_data = {}
     try:
         prompt = _SUMMARY_PROMPT.format(conversation=conv_text)
         response = router.chat(
             messages=[{"role": "user", "content": prompt}],
             tools=None,
         )
-        summary_text = response.content.strip() if response.content else ""
+        raw_output = response.content.strip() if response.content else ""
+        
+        # Extract JSON block if present
+        if "```json" in raw_output:
+            try:
+                import json
+                json_part = raw_output.split("```json")[1].split("```")[0].strip()
+                json_data = json.loads(json_part)
+                summary_text = json_data.get("summary", raw_output.split("```json")[0].strip())
+            except Exception:
+                summary_text = raw_output.split("```json")[0].strip()
+        else:
+            summary_text = raw_output
     except Exception as exc:
         logger.debug("LLM summary failed, using heuristic: %s", exc)
     
@@ -173,10 +198,17 @@ def generate_summary(
         # Fallback to heuristic
         summary = _extract_heuristic_summary(conversation, workspace, conversation_id)
     
-    # Save to memory store
+    # Save to memory store and update profile facts if extracted
     if memory_store:
         try:
             memory_store.add_summary(summary)
+            if json_data:
+                memory_store.update_user_profile(
+                    role=json_data.get("user_role", ""),
+                    tech_stack=json_data.get("tech_stack"),
+                    active_goals=json_data.get("active_goals"),
+                    preferences=json_data.get("preferences"),
+                )
             logger.info("Session summary saved: %s", summary.title[:50])
         except Exception as exc:
             logger.warning("Failed to save summary: %s", exc)

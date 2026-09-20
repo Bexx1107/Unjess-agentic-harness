@@ -128,6 +128,23 @@ class ToolRegistry:
         "is_regex": ["regex"],
         "use_regex": ["regex"],
         "recursive": ["recurse"],
+        # Browser-related
+        "link": ["url"],
+        "href": ["url"],
+        "uri": ["url"],
+        "address": ["url"],
+        "page_url": ["url"],
+        "target_url": ["url"],
+        "site": ["url"],
+        "css_selector": ["selector"],
+        "css": ["selector"],
+        "element": ["selector"],
+        "locator": ["selector"],
+        "input_text": ["text"],
+        "value": ["text"],
+        "input": ["text"],
+        "js": ["expression"],
+        "script": ["expression"],
     }
 
     def _normalize_arguments(

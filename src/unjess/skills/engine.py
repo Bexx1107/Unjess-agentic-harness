@@ -105,21 +105,46 @@ def _parse_yaml_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     yaml_str = match.group(1)
     body = match.group(2) or ""
 
-    # Minimal YAML key: value parsing (avoids requiring PyYAML import here)
+    try:
+        import yaml
+        metadata = yaml.safe_load(yaml_str)
+        if isinstance(metadata, dict):
+            return metadata, body
+    except Exception:
+        pass
+
+    # Minimal fallback parsing if yaml module is missing/fails
     metadata: dict[str, Any] = {}
+    current_key = None
     for line in yaml_str.splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'):
+        line_stripped = line.strip()
+        if not line_stripped or line_stripped.startswith('#'):
             continue
-        colon_idx = line.find(':')
+
+        if line_stripped.startswith('- ') and current_key:
+            item = line_stripped[2:].strip().strip('"\'')
+            if not isinstance(metadata.get(current_key), list):
+                metadata[current_key] = []
+            metadata[current_key].append(item)
+            continue
+
+        colon_idx = line_stripped.find(':')
         if colon_idx < 0:
             continue
-        key = line[:colon_idx].strip()
-        val = line[colon_idx + 1:].strip()
-        # Strip surrounding quotes
+        key = line_stripped[:colon_idx].strip()
+        val = line_stripped[colon_idx + 1:].strip()
         if len(val) >= 2 and val[0] in ('"', "'") and val[-1] == val[0]:
             val = val[1:-1]
-        metadata[key] = val
+
+        current_key = key
+        if val:
+            if val.startswith('[') and val.endswith(']'):
+                items = [i.strip().strip('"\'') for i in val[1:-1].split(',') if i.strip()]
+                metadata[key] = items
+            else:
+                metadata[key] = val
+        else:
+            metadata[key] = ""
 
     return metadata, body
 

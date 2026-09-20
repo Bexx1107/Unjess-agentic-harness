@@ -37,7 +37,7 @@ _PROVIDER_MODELS: dict[str, list[tuple[str, str]]] = {
         ("claude-opus-4.8-20260315", "Ultimate reasoning powerhouse"),
     ],
     "google": [
-        ("gemini-3.5-flash", "Ultra-fast & FREE tier available"),
+        ("gemini-3.1-flash", "Ultra-fast & FREE tier available"),
         ("gemini-3.1-pro", "Massive 2M context — free tier limited"),
     ],
     "groq": [
@@ -62,10 +62,28 @@ _PROVIDER_MODELS: dict[str, list[tuple[str, str]]] = {
         ("zai-glm-4.7", "FREE — ultra-fast LPU inference"),
         ("llama-3.5-70b", "FREE — Meta's flagship model"),
     ],
+    "kimi": [
+        ("kimi-k3", "Flagship 2026 — Moonshot AI long-horizon coding model"),
+        ("kimi-k2.7-code", "High-speed coding model"),
+        ("kimi-latest", "Auto-resolves to Moonshot AI's latest model"),
+    ],
+    "qwen": [
+        ("qwen-max", "Alibaba Cloud flagship model"),
+        ("qwen-plus", "Balanced speed & reasoning model"),
+        ("qwen-turbo", "High-throughput cost-effective model"),
+        ("qwen2.5-coder-32b-instruct", "Specialized open-weight coding model"),
+    ],
     "ollama": [
         ("llama3.5", "Meta's latest — runs locally"),
+        ("llama3.1", "Meta's open model — runs locally"),
         ("codestral-v2", "Mistral's code model — runs locally"),
         ("qwen3-coder", "Alibaba's latest code model — runs locally"),
+    ],
+    "ollama-api": [
+        ("llama3.3", "Meta Llama 3.3 — Ollama Cloud"),
+        ("deepseek-r1", "DeepSeek R1 — Ollama Cloud"),
+        ("qwen2.5-coder:32b", "Qwen 2.5 Coder 32B — Ollama Cloud"),
+        ("mistral-large", "Mistral Large — Ollama Cloud"),
     ],
 }
 
@@ -87,7 +105,9 @@ def _fetch_live_models(
     """
     try:
         if provider == "ollama":
-            return _fetch_ollama_models()
+            return _fetch_ollama_models(settings)
+        elif provider == "ollama-api":
+            return _fetch_ollama_api_models(settings)
         elif provider == "google":
             return _fetch_google_models(settings)
         elif provider == "groq":
@@ -102,29 +122,92 @@ def _fetch_live_models(
             return _fetch_openrouter_models(settings)
         if provider == "cerebras":
             return _fetch_cerebras_models(settings)
+        if provider == "kimi":
+            return _fetch_kimi_models(settings)
+        if provider == "qwen":
+            return _fetch_qwen_models(settings)
     except Exception as exc:
         logger.debug("Failed to fetch live models for %s: %s", provider, exc)
     return []
 
 
-def _fetch_ollama_models() -> list[tuple[str, str]]:
-    """Query Ollama's local API for installed models."""
-    req = Request("http://localhost:11434/api/tags", method="GET")
-    with urlopen(req, timeout=3) as resp:
-        data = json.loads(resp.read())
+def _fetch_kimi_models(settings: Optional[Settings] = None) -> list[tuple[str, str]]:
+    """Fetch live models from Moonshot AI (Kimi) API."""
+    key = _get_api_key("kimi", "MOONSHOT_API_KEY", settings) or _get_api_key("moonshot", "KIMI_API_KEY", settings)
+    if not key:
+        return []
+    url = getattr(settings, "kimi_base_url", "https://api.moonshot.ai/v1") + "/models"
+    try:
+        raw = _api_get_models(url, key)
+        models: list[tuple[str, str]] = []
+        for item in raw:
+            mid = item.get("id", "")
+            if mid:
+                models.append((mid, "Moonshot AI / Kimi model"))
+        return sorted(models, key=lambda x: x[0])
+    except Exception as exc:
+        logger.debug("Failed to fetch Kimi models: %s", exc)
+        return []
 
-    models: list[tuple[str, str]] = []
-    for m in data.get("models", []):
-        name = m.get("name", "")
-        # Strip ":latest" tag for cleaner display
-        display_name = name.replace(":latest", "") if name.endswith(":latest") else name
-        size_gb = m.get("size", 0) / (1024 ** 3)
-        if ":cloud" in name:
-            desc = "☁️ cloud — requires Ollama subscription"
-        else:
+
+def _fetch_qwen_models(settings: Optional[Settings] = None) -> list[tuple[str, str]]:
+    """Fetch live models from Alibaba Cloud DashScope (Qwen) API."""
+    key = _get_api_key("qwen", "DASHSCOPE_API_KEY", settings) or _get_api_key("dashscope", "QWEN_API_KEY", settings)
+    if not key:
+        return []
+    url = getattr(settings, "qwen_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1") + "/models"
+    try:
+        raw = _api_get_models(url, key)
+        models: list[tuple[str, str]] = []
+        for item in raw:
+            mid = item.get("id", "")
+            if mid:
+                models.append((mid, "Alibaba Cloud Qwen model"))
+        return sorted(models, key=lambda x: x[0])
+    except Exception as exc:
+        logger.debug("Failed to fetch Qwen models: %s", exc)
+        return []
+
+
+def _fetch_ollama_models(settings: Optional[Settings] = None) -> list[tuple[str, str]]:
+    """Query local Ollama API for installed models."""
+    base_url = (getattr(settings, "ollama_base_url", None) or "http://localhost:11434").rstrip("/")
+    try:
+        req = Request(f"{base_url}/api/tags", method="GET")
+        with urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read())
+
+        models: list[tuple[str, str]] = []
+        for m in data.get("models", []):
+            name = m.get("name", "")
+            display_name = name.replace(":latest", "") if name.endswith(":latest") else name
+            size_gb = m.get("size", 0) / (1024 ** 3)
             desc = f"{size_gb:.1f}GB — installed locally"
-        models.append((display_name, desc))
-    return sorted(models, key=lambda x: x[0])
+            models.append((display_name, desc))
+        return sorted(models, key=lambda x: x[0])
+    except Exception as exc:
+        logger.debug("Failed to query local Ollama models: %s", exc)
+        return _PROVIDER_MODELS.get("ollama", [])
+
+
+def _fetch_ollama_api_models(settings: Optional[Settings] = None) -> list[tuple[str, str]]:
+    """Fetch cloud models from Ollama Cloud API."""
+    key = _get_api_key("ollama-api", "OLLAMA_API_KEY", settings) or _get_api_key("ollama", "OLLAMA_API_KEY", settings)
+    if not key:
+        return _PROVIDER_MODELS.get("ollama-api", [])
+    base_url = (getattr(settings, "ollama_api_base_url", None) or "https://api.ollama.com").rstrip("/")
+    try:
+        raw = _api_get_models(f"{base_url}/v1/models", key)
+        models: list[tuple[str, str]] = []
+        for item in raw:
+            mid = item.get("id", "")
+            if mid:
+                models.append((mid, "Ollama Cloud model"))
+        if models:
+            return sorted(models, key=lambda x: x[0])
+    except Exception as exc:
+        logger.debug("Failed to fetch Ollama API models: %s", exc)
+    return _PROVIDER_MODELS.get("ollama-api", [])
 
 
 def _api_get_models(url: str, api_key: str, data_key: str = "data") -> list[dict]:
@@ -248,7 +331,10 @@ _PROVIDER_DISPLAY: dict[str, str] = {
     "xai": "xAI (Grok)",
     "openrouter": "OpenRouter",
     "cerebras": "Cerebras",
-    "ollama": "Ollama (Local)",
+    "kimi": "Kimi (Moonshot AI)",
+    "qwen": "Qwen (Alibaba DashScope)",
+    "ollama": "Ollama",
+    "ollama-api": "Ollama API",
 }
 
 _ENV_KEY_NAMES: dict[str, str] = {
@@ -260,6 +346,10 @@ _ENV_KEY_NAMES: dict[str, str] = {
     "xai": "XAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
     "cerebras": "CEREBRAS_API_KEY",
+    "kimi": "MOONSHOT_API_KEY",
+    "qwen": "DASHSCOPE_API_KEY",
+    "ollama": "OLLAMA_API_KEY",
+    "ollama-api": "OLLAMA_API_KEY",
 }
 
 
@@ -279,7 +369,14 @@ def _detect_available_providers(settings: Optional[Settings] = None) -> dict[str
     available["xai"] = bool(os.environ.get("XAI_API_KEY", "") or saved.get("xai", ""))
     available["openrouter"] = bool(os.environ.get("OPENROUTER_API_KEY", "") or saved.get("openrouter", ""))
     available["cerebras"] = bool(os.environ.get("CEREBRAS_API_KEY", "") or saved.get("cerebras", ""))
+    available["kimi"] = bool(os.environ.get("MOONSHOT_API_KEY", "") or os.environ.get("KIMI_API_KEY", "") or saved.get("kimi", ""))
+    available["qwen"] = bool(os.environ.get("DASHSCOPE_API_KEY", "") or os.environ.get("QWEN_API_KEY", "") or saved.get("qwen", ""))
     available["ollama"] = True  # Always available (local)
+    available["ollama-api"] = bool(
+        os.environ.get("OLLAMA_API_KEY", "")
+        or saved.get("ollama-api", "")
+        or (saved.get("ollama", "") and saved.get("ollama", "") != "ollama")
+    )
     return available
 
 
@@ -413,6 +510,7 @@ def run_first_setup(settings: Settings, console: Console) -> Settings:
         "openai",        # 9 — API key (paid)
         "anthropic",     # 10 — API key (paid)
         "ollama",        # 11 — local/free
+        "ollama-api",    # 12 — cloud subscription
     ]
 
     # Row 1: Free Mode (special)
@@ -458,6 +556,10 @@ def run_first_setup(settings: Settings, console: Console) -> Settings:
             else "[dim]Needs CEREBRAS_API_KEY[/dim]"
         ),
         "ollama": "[green]Always available[/green]",
+        "ollama-api": (
+            "[green]API key found[/green]" if available["ollama-api"]
+            else "[dim]Needs OLLAMA_API_KEY[/dim]"
+        ),
     }
 
     cost_map = {
@@ -471,6 +573,7 @@ def run_first_setup(settings: Settings, console: Console) -> Settings:
         "openrouter": "[bold green]FREE[/bold green] (50+ models)",
         "cerebras": "[bold green]FREE[/bold green] (1M tok/day)",
         "ollama": "[bold green]FREE[/bold green] (runs locally)",
+        "ollama-api": "Ollama subscription",
     }
 
     for i, provider in enumerate(provider_order, 2):  # start at 2
@@ -624,7 +727,7 @@ def run_first_setup(settings: Settings, console: Console) -> Settings:
         # Pick the best available free provider as starting model
         if "google" in keys_added:
             start_provider = "google"
-            start_model = "gemini-2.5-flash"
+            start_model = "gemini-3.1-flash"
         elif "groq" in keys_added:
             start_provider = "groq"
             start_model = "llama-3.3-70b-versatile"
@@ -690,13 +793,21 @@ def run_first_setup(settings: Settings, console: Console) -> Settings:
                 selected_provider = "openai"
 
     # --- Check if key is needed but missing (for non-free providers) ---
-    if selected_provider in ("openai", "anthropic", "google", "groq", "mistral", "xai", "openrouter", "cerebras"):
+    if selected_provider in ("openai", "anthropic", "google", "groq", "mistral", "xai", "openrouter", "cerebras", "ollama-api"):
         if not available.get(selected_provider, False):
             env_var = _ENV_KEY_NAMES.get(selected_provider, "")
 
             # Provider-specific setup guide
             setup_guide = ""
-            if selected_provider == "xai":
+            if selected_provider == "ollama-api":
+                setup_guide = (
+                    "\n[bold cyan]How to get your Ollama API key:[/bold cyan]\n"
+                    "  1. Go to [link=https://ollama.com]ollama.com[/link]\n"
+                    "  2. Sign in to your account or subscription\n"
+                    "  3. Copy your API key and set OLLAMA_API_KEY\n"
+                    "  [dim]Access Ollama cloud models via API[/dim]\n"
+                )
+            elif selected_provider == "xai":
                 setup_guide = (
                     "\n[bold cyan]How to get your xAI API key:[/bold cyan]\n"
                     "  1. Go to [link=https://console.x.ai]console.x.ai[/link]\n"

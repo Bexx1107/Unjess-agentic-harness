@@ -236,6 +236,10 @@ class KnowledgeGraph:
                 if word in name_lower:
                     score += 5.0
             
+            # Type boost for user traits, tech stack, and goals
+            if entity.entity_type in ("user_trait", "tech_stack", "project_goal", "architectural_decision"):
+                score += 2.0
+
             # Type boost for frequently mentioned entities
             score += min(entity.mention_count * 0.5, 5.0)
             
@@ -248,7 +252,16 @@ class KnowledgeGraph:
                 scored.append((score, entity))
         
         if not scored:
-            return ""
+            # Fallback: Return top persona/project entities if query doesn't match specific names
+            persona_entities = [
+                e for e in self._entities.values()
+                if e.entity_type in ("user_trait", "tech_stack", "project_goal", "architectural_decision")
+            ]
+            if persona_entities:
+                persona_entities.sort(key=lambda x: x.last_seen, reverse=True)
+                scored = [(1.0, e) for e in persona_entities[:max_entities]]
+            else:
+                return ""
         
         scored.sort(key=lambda x: x[0], reverse=True)
         top = scored[:max_entities]
@@ -315,6 +328,19 @@ class KnowledgeGraph:
         self.add_entity(Path(source_file).name, "file", {"path": source_file})
         self.add_entity(target, "library")
         self.add_relationship(Path(source_file).name, target, relation)
+
+    def record_user_fact(
+        self,
+        subject: str,
+        relation: str,
+        target: str,
+        subject_type: str = "user_trait",
+        target_type: str = "concept",
+    ) -> None:
+        """Record a user or project fact triple (Subject-Relation-Target)."""
+        self.add_entity(subject, subject_type)
+        self.add_entity(target, target_type)
+        self.add_relationship(subject, target, relation)
 
     # ----- Stats -----
 

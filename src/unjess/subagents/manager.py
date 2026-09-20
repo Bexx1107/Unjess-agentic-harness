@@ -47,6 +47,7 @@ class AgentInfo:
     model_override: str = ""           # empty = use parent's model
     tool_filter: list[str] = field(default_factory=list)  # empty = use type defaults
     max_turns: int = 10                 # max LLM round-trips
+    parent_conversation_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.created_at:
@@ -205,6 +206,7 @@ class SubagentManager:
 
         conversation_id = uuid.uuid4().hex[:16]
 
+        parent_id = getattr(self, "current_parent_id", "")
         agent_info = AgentInfo(
             conversation_id=conversation_id,
             type_name=type_name,
@@ -215,6 +217,7 @@ class SubagentManager:
             model_override=model_override,
             tool_filter=tool_filter or [],
             max_turns=max_turns,
+            parent_conversation_id=parent_id,
         )
 
         with self._lock:

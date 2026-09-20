@@ -46,6 +46,11 @@ class Settings:
 
     # --- Provider base URLs (for Ollama / custom endpoints) ---
     ollama_base_url: str = "http://localhost:11434"
+    ollama_api_base_url: str = "https://api.ollama.com"
+    llamacpp_base_url: str = "http://localhost:8080"
+    lmstudio_base_url: str = "http://localhost:1234"
+    kimi_base_url: str = "https://api.moonshot.ai/v1"
+    qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
     # --- Workspace ---
     workspace: str = "."  # resolved to absolute at load time
@@ -53,11 +58,18 @@ class Settings:
     # --- Fallback chain (list of "provider/model" strings) ---
     fallback_chain: list[str] = field(default_factory=list)
 
+    # --- Mobile Companion & Security ---
+    mobile_pin: str = ""  # 4-digit PIN for remote/mobile client access
+    enable_pin_auth: bool = False  # False by default so local & mobile open freely unless enabled
+    allow_network_access: bool = True  # bind to 0.0.0.0 for local Wi-Fi / mobile access
+    network_port: int = 8080
+
     # --- Behavior ---
     max_iterations: int = DEFAULT_MAX_ITERATIONS
     subagent_max_turns: int = 10  # default max LLM turns per subagent
     confirm_commands: bool = True  # ask before running shell commands
     command_timeout: int = DEFAULT_COMMAND_TIMEOUT
+    enable_stuck_detection: bool = True
 
     # --- Display ---
     verbosity: str = "normal"  # "quiet", "normal", "verbose"
@@ -72,6 +84,13 @@ class Settings:
 
     # --- Free mode ---
     free_mode_enabled: bool = False  # start in free-tier rotation mode
+
+    # --- Planning Mode ---
+    planning_mode: str = "auto"  # "auto", "on", "off"
+
+    # --- Context Compaction & Override ---
+    enable_compaction: bool = True
+    context_window_override: int = 0  # 0 = auto-detect based on model
 
     # --- RAG / Embeddings ---
     enable_rag: bool = False  # opt-in: embedding-powered semantic search
@@ -90,6 +109,14 @@ _ENV_KEY_MAP: dict[str, str] = {
     "GOOGLE_API_KEY": "google",
     "GROQ_API_KEY": "groq",
     "MISTRAL_API_KEY": "mistral",
+    "XAI_API_KEY": "xai",
+    "OPENROUTER_API_KEY": "openrouter",
+    "CEREBRAS_API_KEY": "cerebras",
+    "MOONSHOT_API_KEY": "kimi",
+    "KIMI_API_KEY": "kimi",
+    "DASHSCOPE_API_KEY": "qwen",
+    "QWEN_API_KEY": "qwen",
+    "OLLAMA_API_KEY": "ollama-api",
 }
 
 
@@ -99,6 +126,12 @@ def _load_env_keys(settings: Settings) -> None:
         value = os.environ.get(env_var, "")
         if value and provider_name not in settings.api_keys:
             settings.api_keys[provider_name] = value
+
+    # Backward compatibility: if ollama key was saved previously under 'ollama'
+    if "ollama-api" not in settings.api_keys:
+        legacy_key = settings.api_keys.get("ollama", "")
+        if legacy_key and legacy_key != "ollama":
+            settings.api_keys["ollama-api"] = legacy_key
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +187,8 @@ def save_keys(
             to_save["key_pool"] = pool_clean
 
     if not to_save:
+        if keys_path.exists():
+            keys_path.write_text("")
         return
 
     with open(keys_path, "w", encoding="utf-8") as fh:
@@ -202,6 +237,24 @@ def load_config(path: Optional[Path] = None) -> Settings:
             settings.api_key_pool[provider] = keys
 
     _load_env_keys(settings)
+
+    # Resolve default model if empty
+    if not settings.model and settings.provider:
+        defaults = {
+            "google": "gemini-3.1-flash",
+            "openai": "gpt-4o-mini",
+            "anthropic": "claude-3-5-sonnet-latest",
+            "groq": "llama-3.3-70b-versatile",
+            "mistral": "codestral-latest",
+            "xai": "grok-2-1212",
+            "openrouter": "openrouter/free",
+            "cerebras": "zai-glm-4.7",
+            "ollama": "llama3.1",
+            "ollama-api": "llama3.3",
+            "llamacpp": "llamacpp",
+        }
+        settings.model = defaults.get(settings.provider, "")
+
     return settings
 
 
@@ -236,13 +289,17 @@ def ensure_config(path: Optional[Path] = None) -> Path:
 
 
 def is_first_run(path: Optional[Path] = None) -> bool:
-    """Check if this is a first run (no config file exists or model is unconfigured)."""
+    """Check if this is a first run (no config file exists or no provider/API key configured)."""
     config_path = path or DEFAULT_CONFIG_PATH
     if not config_path.exists():
         return True
-    # Check if model is still empty (unconfigured)
     settings = load_config(config_path)
-    return not settings.model
+    if settings.provider == "ollama":
+        return False
+    # Check if we have at least one non-empty API key (configured in keys.yaml or env vars)
+    has_keys = any(val.strip() for val in settings.api_keys.values() if val)
+    return not has_keys
+
 
 
 # ---------------------------------------------------------------------------

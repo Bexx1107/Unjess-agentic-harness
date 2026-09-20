@@ -77,6 +77,41 @@ def _resize_image(
         return data, mime_type
 
 
+def get_improver_options(router: "ProviderRouter | None") -> list[dict[str, str]]:
+    """Get cheapest/fastest models available based on active API keys."""
+    if not router or not hasattr(router, "_providers"):
+        return []
+    options = []
+    # Google (Gemini)
+    if "google" in router._providers:
+        options.append({"label": "Gemini 3.1 Flash", "model": "gemini-3.1-flash", "provider": "google"})
+    # Cerebras
+    if "cerebras" in router._providers:
+        options.append({"label": "GLM 4.7 (Cerebras)", "model": "zai-glm-4.7", "provider": "cerebras"})
+    # Groq
+    if "groq" in router._providers:
+        options.append({"label": "Llama 3.3 70b (Groq)", "model": "llama-3.3-70b-versatile", "provider": "groq"})
+    # OpenAI
+    if "openai" in router._providers:
+        options.append({"label": "GPT-4o Mini", "model": "gpt-4o-mini", "provider": "openai"})
+    # Anthropic
+    if "anthropic" in router._providers:
+        options.append({"label": "Claude 3.5 Haiku", "model": "claude-3-5-haiku-20241022", "provider": "anthropic"})
+    # OpenRouter
+    if "openrouter" in router._providers:
+        options.append({"label": "OpenRouter Free", "model": "openrouter/free", "provider": "openrouter"})
+    # Ollama Local
+    if "ollama" in router._providers:
+        options.append({"label": "Llama 3 (Ollama)", "model": "llama3", "provider": "ollama"})
+    # Ollama API
+    if "ollama-api" in router._providers:
+        options.append({"label": "Llama 3.3 (Ollama API)", "model": "llama3.3", "provider": "ollama-api"})
+    # llama.cpp
+    if "llamacpp" in router._providers:
+        options.append({"label": "llama.cpp Local", "model": "llamacpp", "provider": "llamacpp"})
+    return options
+
+
 def setup_chat_page(
     state: "AppState",
     input_handler: "GUIInput",
@@ -121,7 +156,53 @@ def setup_chat_page(
         ::-webkit-scrollbar-thumb:hover { background: #555; }
         /* Hide drawer scrollbar until hover */
         .q-drawer .q-scrollarea__thumb { opacity: 0; transition: opacity 0.2s; }
-        .q-drawer:hover .q-scrollarea__thumb { opacity: 1; }
+        /* Scoped artifact & markdown max width & overflow wrapping */
+        .nicegui-markdown, .sidebar-artifact-preview, div.markdown {
+            max-width: 100% !important;
+            min-width: 0 !important;
+            overflow-x: auto !important;
+            word-break: break-word !important;
+            overflow-wrap: anywhere !important;
+        }
+        .nicegui-markdown table, .sidebar-artifact-preview table, div.markdown table {
+            display: block !important;
+            max-width: 100% !important;
+            overflow-x: auto !important;
+            word-break: normal !important;
+            border-collapse: collapse !important;
+        }
+        .nicegui-markdown pre, .sidebar-artifact-preview pre, div.markdown pre {
+            max-width: 100% !important;
+            overflow-x: auto !important;
+            white-space: pre-wrap !important;
+            word-break: break-all !important;
+        }
+        .nicegui-markdown img, .sidebar-artifact-preview img, div.markdown img {
+            max-width: 100% !important;
+            height: auto !important;
+        }
+        .sidebar-artifact-preview h1 { font-size: 1.05rem !important; line-height: 1.3 !important; font-weight: 700 !important; margin-top: 6px !important; margin-bottom: 4px !important; color: #f3f4f6 !important; max-width: 100% !important; word-break: break-word !important; }
+        .sidebar-artifact-preview h2 { font-size: 0.95rem !important; line-height: 1.3 !important; font-weight: 700 !important; margin-top: 6px !important; margin-bottom: 4px !important; color: #e5e7eb !important; max-width: 100% !important; word-break: break-word !important; }
+        .sidebar-artifact-preview h3 { font-size: 0.88rem !important; line-height: 1.3 !important; font-weight: 600 !important; margin-top: 4px !important; margin-bottom: 2px !important; color: #d1d5db !important; max-width: 100% !important; word-break: break-word !important; }
+        .sidebar-artifact-preview h4, .sidebar-artifact-preview h5, .sidebar-artifact-preview h6 { font-size: 0.82rem !important; font-weight: 600 !important; margin-top: 4px !important; margin-bottom: 2px !important; color: #9ca3af !important; max-width: 100% !important; word-break: break-word !important; }
+        .sidebar-artifact-preview p, .sidebar-artifact-preview li { font-size: 0.78rem !important; line-height: 1.35 !important; margin-bottom: 4px !important; color: #d1d5db !important; max-width: 100% !important; word-break: break-word !important; }
+        .sidebar-artifact-preview code { font-size: 0.72rem !important; background: rgba(255,255,255,0.1) !important; padding: 1px 4px !important; border-radius: 3px !important; }
+
+        /* Mobile Responsive Overrides (strictly < 768px — desktop EXE is 100% untouched) */
+        @media (max-width: 768px) {
+            .q-drawer { width: 85vw !important; max-width: 320px !important; }
+            .q-page { padding: 4px 4px 140px 4px !important; }
+            .q-page-container { padding-bottom: 140px !important; }
+            .nicegui-content { padding: 0 0 140px 0 !important; }
+            .chat-message-card { max-width: 96% !important; padding: 10px !important; margin: 4px 0 !important; }
+            .chat-input-bar { padding: 6px 8px !important; }
+            .mobile-hide { display: none !important; }
+            .mobile-full-width { width: 100% !important; max-width: 100% !important; }
+            .q-btn { min-height: 40px !important; }
+            .q-field__control { min-height: 44px !important; }
+            .nicegui-markdown p, .nicegui-markdown li { font-size: 0.88rem !important; line-height: 1.45 !important; }
+            .nicegui-markdown code, .nicegui-markdown pre { font-size: 0.8rem !important; }
+        }
     """)
 
     # ── Settings dialog (popup) ───────────────────────────────────────
@@ -130,16 +211,39 @@ def setup_chat_page(
         try:
             from unjess.gui.components.settings_dialog import create_settings_dialog
             settings_dialog = create_settings_dialog(
-                settings, state, router
+                settings, state, router, agent
             )
         except Exception as exc:
-            logger.warning("Failed to create settings dialog: %s", exc)
+            logger.warning("Failed to create settings dialog at page init: %s", exc)
 
     def _open_settings() -> None:
+        nonlocal settings_dialog
+        if not settings_dialog and settings:
+            try:
+                from unjess.gui.components.settings_dialog import create_settings_dialog
+                settings_dialog = create_settings_dialog(
+                    settings, state, router, agent
+                )
+            except Exception as exc:
+                logger.error("Failed to create settings dialog on demand: %s", exc, exc_info=True)
+                ui.notify(f"Settings error: {exc}", type="negative")
+                return
+
         if settings_dialog:
-            settings_dialog.open()
+            try:
+                settings_dialog.open()
+            except Exception as exc:
+                logger.warning("Re-creating settings dialog after open error: %s", exc)
+                try:
+                    from unjess.gui.components.settings_dialog import create_settings_dialog
+                    settings_dialog = create_settings_dialog(
+                        settings, state, router, agent
+                    )
+                    settings_dialog.open()
+                except Exception as inner_exc:
+                    ui.notify(f"Could not open settings: {inner_exc}", type="negative")
         else:
-            ui.notify("Settings not available", type="warning")
+            ui.notify("Settings unavailable", type="warning")
 
     # ── Approval dialog ───────────────────────────────────────────────
     approval_dialog = render_approval_dialog(input_handler)
@@ -221,30 +325,41 @@ def setup_chat_page(
                 def __getattr__(self, name: str) -> object:
                     return lambda *a, **kw: None
 
-            gui_display = _GUICommandDisplay()
-            original_display = cmd_ctx.display
-            cmd_ctx.display = gui_display
-            try:
-                dispatch(text, cmd_ctx)
-            except Exception as exc:
-                gui_display._lines.append(f"⚠️ Command error: {exc}")
-            finally:
-                cmd_ctx.display = original_display
+            def _run_cmd_in_bg() -> None:
+                gui_display = _GUICommandDisplay()
+                original_display = cmd_ctx.display
+                cmd_ctx.display = gui_display
+                try:
+                    dispatch(text, cmd_ctx)
+                except Exception as exc:
+                    gui_display._lines.append(f"⚠️ Command error: {exc}")
+                finally:
+                    cmd_ctx.display = original_display
 
-            # Show captured output as assistant message
-            output = gui_display.get_output().strip()
-            if output:
-                state.append_message(ChatMessage(
-                    role="assistant",
-                    content=output,
-                ))
+                # Show captured output as assistant message
+                output = gui_display.get_output().strip()
+                if output:
+                    state.append_message(ChatMessage(
+                        role="assistant",
+                        content=output,
+                    ))
+                state.is_thinking = False
+                state.dirty = True
+
+            state.is_thinking = True
             state.dirty = True
+            import threading
+            threading.Thread(target=_run_cmd_in_bg, daemon=True).start()
             return
 
-        # If the user is viewing a different conversation than the agent has loaded,
-        # switch the agent's context now (only on actual message send — not on browse)
         if state.current_conversation_id != state._agent_conversation_id:
             agent.clear_history()
+            # Reload past messages into agent's conversation history
+            new_convo = []
+            for msg in state.messages:
+                # Map ChatMessage to role/content dict
+                new_convo.append({"role": msg.role, "content": msg.content})
+            agent.conversation = new_convo
             state.is_thinking = False
             state.files_changed.clear()
             state._agent_conversation_id = state.current_conversation_id
@@ -279,6 +394,22 @@ def setup_chat_page(
         """Remove the last user message and any assistant response after it."""
         if not state.messages:
             return
+
+        # Revert code changes for the last user message if it has a checkpoint
+        user_msg = None
+        for msg in reversed(state.messages):
+            if msg.role == "user":
+                user_msg = msg
+                break
+
+        if user_msg and user_msg.checkpoint_id:
+            if hasattr(agent, '_undo_manager') and agent._undo_manager:
+                success, result_msg = agent._undo_manager.undo(steps=1)
+                if not success:
+                    ui.notify(f"Code undo failed: {result_msg}", type="negative", position="top")
+                else:
+                    ui.notify("Last code changes undone", type="positive", position="top")
+
         # Remove from end: assistant messages, then the last user message
         while state.messages and state.messages[-1].role == "assistant":
             state.messages.pop()
@@ -354,44 +485,44 @@ def setup_chat_page(
         agent.clear_history()
         state.is_thinking = False
         state.files_changed.clear()
+        state.artifacts.clear()
         state.dirty = True
 
     def _on_new_conversation(workspace_path: str | None) -> None:
         """Handle new conversation from workspace picker dialog."""
         _new_conversation()
+        import uuid
+        import time
+        from pathlib import Path as _Path
+        from unjess.tools.file_tools import update_workspace
+
+        conv_id = str(uuid.uuid4())
+        created = time.time()
+
         if workspace_path:
             state.workspace = workspace_path
             ws_name = workspace_path.rstrip("/\\").rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
             title = f"New chat in {ws_name}"
             if settings:
                 settings.workspace = workspace_path
-            # Update file tools to operate in the new workspace
-            from pathlib import Path as _Path
-            from unjess.tools.file_tools import update_workspace
             update_workspace(_Path(workspace_path))
+            active_ws = workspace_path
         else:
             title = "Quick chat"
-            # Clear workspace so the agent doesn't reference CWD
-            state.workspace = ""
+            # Isolate quick chat in a dedicated session folder under ~/.unjess/workspaces/
+            session_ws = _Path.home() / ".unjess" / "workspaces" / f"session_{conv_id[:8]}"
+            session_ws.mkdir(parents=True, exist_ok=True)
+            active_ws = str(session_ws)
+            state.workspace = active_ws
             if settings:
-                import os
-                home = os.path.expanduser("~")
-                settings.workspace = home
-                # Update file tools to use home dir for quick chats
-                from pathlib import Path as _Path
-                from unjess.tools.file_tools import update_workspace
-                update_workspace(_Path(home))
-
-        import uuid
-        import time
-        conv_id = str(uuid.uuid4())
-        created = time.time()
+                settings.workspace = active_ws
+            update_workspace(session_ws)
 
         # Always add to local list for immediate sidebar display
         state.local_conversations.append({
             "conversation_id": conv_id,
             "title": title,
-            "workspace": workspace_path or "",
+            "workspace": active_ws,
             "model": state.model,
             "created_at": created,
         })
@@ -489,47 +620,35 @@ def setup_chat_page(
         dlg.open()
 
     def _show_scheduled_tasks() -> None:
-        """Show a dialog listing scheduled tasks."""
-        tasks: list = []
-        if state.scheduler:
-            try:
-                tasks = state.scheduler.list_tasks()
-            except Exception as exc:
-                logger.warning("Failed to list scheduled tasks: %s", exc)
+        """Show full Schedule Dashboard modal dialog."""
+        from unjess.scheduler import Scheduler
+        from unjess.gui.components.schedule_dashboard import render_schedule_dashboard
+        
+        sched = state.scheduler or Scheduler()
 
-        with ui.dialog() as dlg, ui.card().style(
-            "background: #1a1a1a; min-width: 400px; max-height: 60vh;"
+        dialog = ui.dialog()
+        with dialog, ui.card().classes(
+            "w-[95vw] max-w-[800px] max-h-[85vh] bg-[#18181c] border border-gray-800 p-5 rounded-xl flex flex-col gap-3 text-white overflow-y-auto"
         ):
-            ui.label("Scheduled Tasks").classes(
-                "text-sm font-semibold text-gray-300 mb-2"
-            )
-            if not tasks:
-                ui.label("No scheduled tasks").classes(
-                    "text-xs text-gray-500 py-4"
-                )
-            else:
-                for task in tasks:
-                    name = getattr(task, "name", str(task))
-                    status = getattr(task, "status", "unknown")
-                    with ui.row().classes("items-center gap-2 w-full py-1"):
-                        color = "#4caf50" if status == "RUNNING" else "#616161"
-                        ui.icon("schedule", size="14px").style(f"color: {color}")
-                        ui.label(str(name)[:50]).classes("text-sm text-gray-300 flex-1")
-                        ui.label(str(status)).classes("text-xs text-gray-600")
-            with ui.row().classes("w-full justify-end mt-3"):
-                ui.button("Close", on_click=dlg.close).props(
+            render_schedule_dashboard(sched)
+            with ui.row().classes("w-full justify-end mt-2"):
+                ui.button("Close", on_click=dialog.close).props(
                     "flat dense no-caps"
-                ).classes("text-gray-500")
-        dlg.open()
+                ).classes("text-gray-400")
+
+        dialog.open()
 
     def _on_select_conversation(conversation_id: str) -> None:
         """Handle clicking a past conversation — display-only, doesn't touch agent context."""
         from pathlib import Path
         conversations_dir = Path.home() / ".unjess" / "conversations"
 
-        # Save current conversation messages to cache before switching
-        if state.current_conversation_id and state.messages:
-            state._message_cache[state.current_conversation_id] = list(state.messages)
+        # Save current conversation messages, files, and artifacts to cache before switching
+        if state.current_conversation_id:
+            if state.messages:
+                state._message_cache[state.current_conversation_id] = list(state.messages)
+            state._files_changed_cache[state.current_conversation_id] = list(state.files_changed)
+            state._artifacts_cache[state.current_conversation_id] = list(state.artifacts)
 
         # Try multiple ID patterns since CLI/GUI use different formats
         candidates = [
@@ -550,6 +669,8 @@ def setup_chat_page(
 
         # Only update the DISPLAY — don't touch agent context
         state.clear_messages()
+        state.files_changed.clear()
+        state.artifacts.clear()
         state.current_conversation_id = conversation_id
         state._conversation_renamed = True
 
@@ -561,6 +682,12 @@ def setup_chat_page(
             # Update file tools to operate in the correct workspace
             from unjess.tools.file_tools import update_workspace
             update_workspace(Path(ws))
+
+        # Restore cached files and artifacts
+        if conversation_id in state._files_changed_cache:
+            state.files_changed.extend(state._files_changed_cache[conversation_id])
+        if conversation_id in state._artifacts_cache:
+            state.artifacts.extend(state._artifacts_cache[conversation_id])
 
         # 1. Check in-memory cache first (GUI sessions)
         if conversation_id in state._message_cache:
@@ -937,7 +1064,85 @@ def setup_chat_page(
             with ui.row().classes(
                 "w-full no-wrap items-center rounded-xl px-3 py-1 gap-2"
             ).style("background: #1a1a1a; border: 1px solid #333"):
-                ui.icon("psychology", size="20px").classes("text-gray-600")
+
+                # ── Improve Prompt toggle (✨) ────────────────────────
+                _improve_mode = {"on": False}
+
+                improve_btn = ui.button(
+                    icon="auto_fix_high",
+                ).props("round flat dense color=grey-8").classes(
+                    ""
+                ).style("min-width: 32px").tooltip(
+                    "Improve Prompt mode — rewrites your prompt before sending"
+                )
+
+                # Dynamic model select dropdown for prompt improver
+                options = get_improver_options(router)
+                opts_dict = {opt["model"]: opt["label"] for opt in options}
+                default_val = options[0]["model"] if options else None
+
+                model_select = ui.select(
+                    options=opts_dict,
+                    value=default_val,
+                ).props(
+                    "dense borderless dark options-dark behavior=menu"
+                ).classes(
+                    "text-xs text-amber-400 w-32"
+                )
+                model_select.set_visibility(False)
+
+                def _toggle_improve() -> None:
+                    """Toggle improve-prompt mode on/off."""
+                    if not options:
+                        ui.notify(
+                            "No configured providers available for prompt improvement. Add API keys in settings first.",
+                            type="warning", position="top",
+                        )
+                        return
+                    _improve_mode["on"] = not _improve_mode["on"]
+                    if _improve_mode["on"]:
+                        improve_btn.props("color=amber-6")
+                        model_select.set_visibility(True)
+                        ui.notify(
+                            f"✨ Improve mode ON (using {opts_dict.get(model_select.value)})",
+                            type="info", position="top",
+                        )
+                    else:
+                        improve_btn.props("color=grey-8")
+                        model_select.set_visibility(False)
+                        ui.notify(
+                            "Improve mode OFF",
+                            type="info", position="top",
+                        )
+
+                improve_btn.on_click(_toggle_improve)
+
+                # Planning Mode manual override button
+                initial_plan_mode = getattr(settings, "planning_mode", "auto")
+                plan_btn = ui.button(icon="assignment").props("flat round dense").classes("w-7 h-7")
+                
+                def _update_plan_btn_style(mode: str) -> None:
+                    if mode == "on":
+                        plan_btn.props("color=blue")
+                        plan_btn.tooltip("Planning Mode: ALWAYS ON")
+                    elif mode == "off":
+                        plan_btn.props("color=grey-8")
+                        plan_btn.tooltip("Planning Mode: ALWAYS OFF")
+                    else:
+                        plan_btn.props("color=violet-4")
+                        plan_btn.tooltip("Planning Mode: AUTO (smart-detect)")
+                
+                _update_plan_btn_style(initial_plan_mode)
+
+                def _toggle_plan_mode() -> None:
+                    modes = ["auto", "on", "off"]
+                    current = getattr(settings, "planning_mode", "auto")
+                    nxt = modes[(modes.index(current) + 1) % len(modes)]
+                    settings.planning_mode = nxt
+                    _update_plan_btn_style(nxt)
+                    ui.notify(f"Planning Mode set to: {nxt.upper()}", type="info", position="top")
+
+                plan_btn.on_click(_toggle_plan_mode)
 
                 text_input = ui.input(
                     placeholder="Ask anything, @ to mention, / for actions..."
@@ -991,6 +1196,54 @@ def setup_chat_page(
                     "round dense unelevated"
                 ).classes("bg-primary text-white w-8 h-8").style("min-width: 32px")
 
+                def _improve_prompt(prompt_text: str) -> None:
+                    """Send prompt to a cheap model for improvement, then replace input text."""
+                    import asyncio
+
+                    async def _do_improve() -> None:
+                        try:
+                            improve_model = model_select.value or "gemini-3.1-flash"
+                            messages = [
+                                {"role": "user", "content": (
+                                    "Improve this prompt. Return ONLY the improved prompt, "
+                                    "nothing else — no explanation, no preamble:\n\n"
+                                    f"{prompt_text}"
+                                )},
+                            ]
+                            resp = await asyncio.to_thread(router.chat, messages, model=improve_model)
+                            improved = resp.text.strip()
+                            with text_input.client:
+                                if improved:
+                                    text_input.value = improved
+                                    # Record cost in agent cost tracker
+                                    if agent._logger and resp.usage:
+                                        agent._logger.cost_tracker.record_llm_call(
+                                            model=improve_model,
+                                            tokens_in=resp.usage.prompt_tokens,
+                                            tokens_out=resp.usage.completion_tokens,
+                                            thinking_tokens=resp.usage.thinking_tokens,
+                                        )
+                                    ui.notify(
+                                        "✨ Prompt improved — review and send",
+                                        type="positive", position="top",
+                                    )
+                                else:
+                                    text_input.value = prompt_text
+                                    ui.notify(
+                                        "Could not improve — original restored",
+                                        type="warning", position="top",
+                                    )
+                        except Exception as exc:
+                            with text_input.client:
+                                text_input.value = prompt_text
+                                ui.notify(
+                                    f"Improve failed: {exc}",
+                                    type="negative", position="top",
+                                )
+
+                    text_input.value = "✨ Improving prompt..."
+                    asyncio.create_task(_do_improve())
+
                 def _do_send_or_stop() -> None:
                     """Send message or stop generation depending on state."""
                     if state.is_thinking:
@@ -999,6 +1252,16 @@ def setup_chat_page(
                         val = text_input.value
                         images = list(_pending_images)  # snapshot
                         if val or images:
+                            # Improve mode: rewrite prompt first (>10 words, no images-only)
+                            if (
+                                _improve_mode["on"]
+                                and val
+                                and len(val.split()) > 10
+                                and not val.startswith("/")
+                                and router is not None
+                            ):
+                                _improve_prompt(val)
+                                return  # Don't send yet — user reviews improved text
                             text_input.value = ""
                             _pending_images.clear()
                             _rebuild_preview()
@@ -1050,12 +1313,27 @@ def setup_chat_page(
                             const blob = item.getAsFile();
                             const reader = new FileReader();
                             reader.onload = () => {
-                                const b64 = reader.result.split(',')[1];
-                                emit({
-                                    data: b64,
-                                    mime_type: blob.type,
-                                    name: 'clipboard_' + Date.now() + '.png'
-                                });
+                                const img = new Image();
+                                img.onload = () => {
+                                    const canvas = document.createElement('canvas');
+                                    const max = 1280;
+                                    let w = img.width, h = img.height;
+                                    if (w > max || h > max) {
+                                        if (w > h) { h = Math.round(h * max / w); w = max; }
+                                        else { w = Math.round(w * max / h); h = max; }
+                                    }
+                                    canvas.width = w; canvas.height = h;
+                                    const ctx = canvas.getContext('2d');
+                                    ctx.drawImage(img, 0, 0, w, h);
+                                    const dataUri = canvas.toDataURL('image/jpeg', 0.85);
+                                    const b64 = dataUri.split(',')[1];
+                                    emit({
+                                        data: b64,
+                                        mime_type: 'image/jpeg',
+                                        name: 'clipboard_' + Date.now() + '.jpg'
+                                    });
+                                };
+                                img.src = reader.result;
                             };
                             reader.readAsDataURL(blob);
                             return;
@@ -1296,18 +1574,35 @@ def setup_chat_page(
         except Exception:
             pass  # footer label may not exist yet during init
 
-        # Toggle send/stop button icon based on generation state
+        # Keep state.is_free in sync with currently active model
+        try:
+            from unjess.conversation_logger import is_free_model
+            state.is_free = is_free_model(model_text, state.provider or "")
+        except Exception:
+            pass
+
+        # Toggle send/stop button icon and disabled states based on generation / pending state
         try:
             if state.is_thinking:
+                text_input.props("disable")
                 send_stop_btn.props("color=red")
                 send_stop_btn._props["icon"] = "stop"
+                send_stop_btn.props(remove="disable")
+                send_stop_btn.update()
+            elif input_handler.has_pending:
+                text_input.props("disable")
+                send_stop_btn.props("disable")
+                send_stop_btn.props(remove="color=red")
+                send_stop_btn._props["icon"] = "arrow_upward"
                 send_stop_btn.update()
             else:
+                text_input.props(remove="disable")
+                send_stop_btn.props(remove="disable")
                 send_stop_btn.props(remove="color=red")
                 send_stop_btn._props["icon"] = "arrow_upward"
                 send_stop_btn.update()
         except Exception:
-            pass  # button may not exist yet during init
+            pass  # elements may not exist yet during init
 
         msg_snapshot = state.get_messages_snapshot()
         msg_count = len(msg_snapshot)
@@ -1328,18 +1623,22 @@ def setup_chat_page(
             with chat_container:
                 for msg in msg_snapshot:
                     render_message(msg)
+                ui.element("div").classes("h-28 sm:h-16 w-full shrink-0")
             rendered_count = msg_count
             chat_scroll.scroll_to(percent=1.0)
 
         elif state.dirty and msg_count > 0:
             # Same message count but content updated (streaming, tool results)
-            # Remove and re-render only the last message
             children = list(chat_container)
-            if children:
+            if len(children) >= 2:
+                chat_container.remove(children[-1]) # bottom spacer
+                chat_container.remove(children[-2]) # last message
+            elif children:
                 chat_container.remove(children[-1])
             last_msg = msg_snapshot[-1]
             with chat_container:
                 render_message(last_msg)
+                ui.element("div").classes("h-28 sm:h-16 w-full shrink-0")
             chat_scroll.scroll_to(percent=1.0)
 
         if needs_refresh:

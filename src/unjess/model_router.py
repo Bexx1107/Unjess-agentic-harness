@@ -55,11 +55,11 @@ class ModelTier:
 _MODEL_TIERS: dict[str, ModelTier] = {
     # Cheap / fast
     "gpt-4o-mini": ModelTier("gpt-4o-mini", "cheap", 0.15, 0.60),
-    "gemini-2.5-flash": ModelTier("gemini-2.5-flash", "cheap", 0.15, 0.60),
+    "gemini-3.1-flash": ModelTier("gemini-3.1-flash", "cheap", 0.15, 0.60),
     # Standard
     "gpt-4o": ModelTier("gpt-4o", "standard", 2.50, 10.00),
     "claude-sonnet-4-20250514": ModelTier("claude-sonnet-4-20250514", "standard", 3.00, 15.00),
-    "gemini-2.5-pro": ModelTier("gemini-2.5-pro", "standard", 1.25, 10.00),
+    "gemini-3.1-pro": ModelTier("gemini-3.1-pro", "standard", 1.25, 10.00),
     # Expensive / reasoning
     "o3": ModelTier("o3", "reasoning", 2.00, 8.00),
     "o4-mini": ModelTier("o4-mini", "reasoning", 1.10, 4.40),
@@ -235,7 +235,7 @@ class ModelRouter:
         elif "claude" in model:
             return "claude-3-5-haiku-20241022"
         elif "gemini" in model:
-            return "gemini-2.5-flash"
+            return "gemini-3.1-flash"
 
         return self._settings.model  # fallback to same model
 
