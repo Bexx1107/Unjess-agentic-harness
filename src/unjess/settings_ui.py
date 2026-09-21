@@ -24,6 +24,7 @@ _CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
         ("max_iterations",     "int",   "Max tool-call iterations per message"),
         ("confirm_commands",   "bool",  "Ask before running shell commands"),
         ("command_timeout",    "int",   "Command timeout in seconds"),
+        ("llm_timeout",        "float", "LLM request timeout in seconds (default 300)"),
     ],
     "Display": [
         ("verbosity",          "str",   "Output verbosity (quiet / normal / verbose)"),

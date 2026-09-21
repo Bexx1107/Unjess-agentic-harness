@@ -521,6 +521,23 @@ class Agent:
                     )
                     break
 
+                # --- Auto-retry on timeout ---
+                if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                    consecutive_errors += 1
+                    if consecutive_errors < 3:
+                        import time as _time
+                        wait = min(2 ** consecutive_errors, 5)
+                        self._display.show_info(
+                            f"⏱️ Model request timed out — retrying in {wait}s (attempt {consecutive_errors}/3)..."
+                        )
+                        _time.sleep(wait)
+                        continue  # retry
+                    self._display.print_markdown(
+                        "\n\n⚠️ **Request timed out** — the model took too long to respond. "
+                        "You can increase the LLM timeout in Settings, or use `/model` to switch to a faster model.\n"
+                    )
+                    break
+
                 if "failed_generation" in error_msg.lower():
                     self._display.show_info(
                         "This model couldn't generate a valid tool call.\n"

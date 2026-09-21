@@ -26,6 +26,7 @@ from unjess.config import (
     IGNORE_PATTERNS,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_COMMAND_TIMEOUT,
+    DEFAULT_LLM_TIMEOUT,
 )
 
 
@@ -131,6 +132,11 @@ class TestSettingsDefaults:
         s2 = Settings()
         s1.api_keys["test"] = "key"
         assert "test" not in s2.api_keys
+
+    def test_llm_timeout_default(self) -> None:
+        s = Settings()
+        assert s.llm_timeout == DEFAULT_LLM_TIMEOUT
+        assert s.llm_timeout == 300.0
 
 
 # ======================================================================

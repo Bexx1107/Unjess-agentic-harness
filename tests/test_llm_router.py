@@ -240,3 +240,12 @@ class TestOllamaProviderKeyIntegration:
         router = ProviderRouter(settings)
         provider, _ = router.get_provider("llama3.3", explicit_provider="ollama-api")
         assert str(provider._client.base_url).rstrip("/") == "https://ollama.com/v1"
+
+    def test_llm_timeout_passed_to_providers(self) -> None:
+        from unjess.config import Settings
+        from unjess.llm.router import ProviderRouter
+
+        settings = Settings(llm_timeout=450.0)
+        router = ProviderRouter(settings)
+        provider, _ = router.get_provider("llama3.1", explicit_provider="ollama")
+        assert getattr(provider, "_timeout", None) == 450.0

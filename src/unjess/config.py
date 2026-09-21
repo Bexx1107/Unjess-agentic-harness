@@ -20,6 +20,7 @@ DEFAULT_MODEL = ""
 DEFAULT_PROVIDER = ""  # auto-detect from model name
 DEFAULT_MAX_ITERATIONS = 50
 DEFAULT_COMMAND_TIMEOUT = 30
+DEFAULT_LLM_TIMEOUT = 300.0
 
 IGNORE_PATTERNS: list[str] = [
     ".git", "__pycache__", "node_modules", ".venv", "venv",
@@ -69,6 +70,7 @@ class Settings:
     subagent_max_turns: int = 10  # default max LLM turns per subagent
     confirm_commands: bool = True  # ask before running shell commands
     command_timeout: int = DEFAULT_COMMAND_TIMEOUT
+    llm_timeout: float = DEFAULT_LLM_TIMEOUT
     enable_stuck_detection: bool = True
 
     # --- Display ---

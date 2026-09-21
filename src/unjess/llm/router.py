@@ -90,6 +90,7 @@ class ProviderRouter:
     def _init_providers(self) -> None:
         """Instantiate providers based on available API keys."""
         keys = self._settings.api_keys
+        llm_timeout = float(getattr(self._settings, "llm_timeout", 300.0))
 
         # OpenAI
         if keys.get("openai"):
@@ -97,12 +98,14 @@ class ProviderRouter:
                 api_key=keys["openai"],
                 default_model=self._settings.model,
                 name="openai",
+                timeout=llm_timeout,
             )
 
         # Anthropic
         if keys.get("anthropic"):
             self._providers["anthropic"] = AnthropicProvider(
                 api_key=keys["anthropic"],
+                timeout=llm_timeout,
             )
 
         # Google
@@ -118,6 +121,7 @@ class ProviderRouter:
                 base_url="https://api.groq.com/openai/v1",
                 default_model="llama-3.3-70b-versatile",
                 name="groq",
+                timeout=llm_timeout,
             )
 
         # Mistral (OpenAI-compatible, free tier available)
@@ -127,6 +131,7 @@ class ProviderRouter:
                 base_url="https://api.mistral.ai/v1",
                 default_model="codestral-latest",
                 name="mistral",
+                timeout=llm_timeout,
             )
 
         # xAI / Grok (OpenAI-compatible)
@@ -136,6 +141,7 @@ class ProviderRouter:
                 base_url="https://api.x.ai/v1",
                 default_model="grok-4.1-fast",
                 name="xai",
+                timeout=llm_timeout,
             )
 
         # OpenRouter (OpenAI-compatible, 50+ free models)
@@ -145,6 +151,7 @@ class ProviderRouter:
                 base_url="https://openrouter.ai/api/v1",
                 default_model="openrouter/free",
                 name="openrouter",
+                timeout=llm_timeout,
             )
 
         # Cerebras (OpenAI-compatible, ultra-fast free tier)
@@ -154,6 +161,7 @@ class ProviderRouter:
                 base_url="https://api.cerebras.ai/v1",
                 default_model="zai-glm-4.7",
                 name="cerebras",
+                timeout=llm_timeout,
             )
 
         # Kimi / Moonshot AI (OpenAI-compatible)
@@ -163,6 +171,7 @@ class ProviderRouter:
                 base_url=getattr(self._settings, "kimi_base_url", "https://api.moonshot.ai/v1"),
                 default_model="kimi-k3",
                 name="kimi",
+                timeout=llm_timeout,
             )
 
         # Qwen / DashScope (OpenAI-compatible)
@@ -172,6 +181,7 @@ class ProviderRouter:
                 base_url=getattr(self._settings, "qwen_base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
                 default_model="qwen-max",
                 name="qwen",
+                timeout=llm_timeout,
             )
 
         # Ollama (Local — runs locally without API key)
@@ -184,7 +194,7 @@ class ProviderRouter:
                 base_url=ollama_url,
                 default_model="llama3.1",
                 name="ollama",
-                timeout=60.0,
+                timeout=llm_timeout,
             )
         except Exception:
             pass  # Ollama local not available — skip silently
@@ -207,7 +217,7 @@ class ProviderRouter:
                     base_url=ollama_api_url,
                     default_model="llama3.3",
                     name="ollama-api",
-                    timeout=300.0,
+                    timeout=llm_timeout,
                 )
             except Exception:
                 pass  # Ollama API not available — skip silently
@@ -219,7 +229,7 @@ class ProviderRouter:
                 base_url=f"{self._settings.llamacpp_base_url}/v1",
                 default_model="llamacpp",
                 name="llamacpp",
-                timeout=300.0,
+                timeout=llm_timeout,
             )
         except Exception:
             pass  # llama.cpp not available — skip silently
@@ -234,7 +244,7 @@ class ProviderRouter:
                 base_url=lm_url,
                 default_model="local-model",
                 name="lmstudio",
-                timeout=300.0,
+                timeout=llm_timeout,
             )
         except Exception:
             pass  # LM Studio not available — skip silently
@@ -456,15 +466,17 @@ class ProviderRouter:
 
     def _init_single_provider(self, provider: str, api_key: str) -> None:
         """Re-initialize a single provider with a new API key."""
+        llm_timeout = float(getattr(self._settings, "llm_timeout", 300.0))
         if provider == "google":
             self._providers["google"] = GoogleProvider(api_key=api_key)
         elif provider == "anthropic":
-            self._providers["anthropic"] = AnthropicProvider(api_key=api_key)
+            self._providers["anthropic"] = AnthropicProvider(api_key=api_key, timeout=llm_timeout)
         elif provider == "openai":
             self._providers["openai"] = OpenAICompatibleProvider(
                 api_key=api_key,
                 default_model=self._settings.model,
                 name="openai",
+                timeout=llm_timeout,
             )
         elif provider == "groq":
             self._providers["groq"] = OpenAICompatibleProvider(
@@ -472,6 +484,7 @@ class ProviderRouter:
                 base_url="https://api.groq.com/openai/v1",
                 default_model="llama-3.3-70b-versatile",
                 name="groq",
+                timeout=llm_timeout,
             )
         elif provider == "mistral":
             self._providers["mistral"] = OpenAICompatibleProvider(
@@ -479,6 +492,7 @@ class ProviderRouter:
                 base_url="https://api.mistral.ai/v1",
                 default_model="codestral-latest",
                 name="mistral",
+                timeout=llm_timeout,
             )
         elif provider == "xai":
             self._providers["xai"] = OpenAICompatibleProvider(
@@ -486,6 +500,7 @@ class ProviderRouter:
                 base_url="https://api.x.ai/v1",
                 default_model="grok-4.1-fast",
                 name="xai",
+                timeout=llm_timeout,
             )
         elif provider == "openrouter":
             self._providers["openrouter"] = OpenAICompatibleProvider(
@@ -493,6 +508,7 @@ class ProviderRouter:
                 base_url="https://openrouter.ai/api/v1",
                 default_model="openrouter/free",
                 name="openrouter",
+                timeout=llm_timeout,
             )
         elif provider == "cerebras":
             self._providers["cerebras"] = OpenAICompatibleProvider(
@@ -500,6 +516,7 @@ class ProviderRouter:
                 base_url="https://api.cerebras.ai/v1",
                 default_model="zai-glm-4.7",
                 name="cerebras",
+                timeout=llm_timeout,
             )
         elif provider == "ollama":
             ollama_url = getattr(self._settings, "ollama_base_url", "http://localhost:11434").rstrip("/")
@@ -510,7 +527,7 @@ class ProviderRouter:
                 base_url=ollama_url,
                 default_model="llama3.1",
                 name="ollama",
-                timeout=300.0,
+                timeout=llm_timeout,
             )
         elif provider == "ollama-api":
             ollama_api_url = getattr(self._settings, "ollama_api_base_url", "https://ollama.com").rstrip("/")
@@ -523,7 +540,7 @@ class ProviderRouter:
                 base_url=ollama_api_url,
                 default_model="llama3.3",
                 name="ollama-api",
-                timeout=300.0,
+                timeout=llm_timeout,
             )
         else:
             # Unknown provider — full reload

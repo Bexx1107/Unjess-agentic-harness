@@ -395,6 +395,33 @@ class TestRunErrorHandling:
         # Should have auto-compacted
         agent._display.show_info.assert_called()
 
+    def test_run_timeout_retries_and_succeeds(self) -> None:
+        agent = _make_agent()
+        response = LLMResponse(
+            text="Done after timeout retry", tool_calls=[], model="test-model",
+            usage=Usage(prompt_tokens=5, completion_tokens=5),
+        )
+        call_count = [0]
+        def stream_side_effect(*a, **kw):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("Request timed out.")
+            return response
+
+        agent._stream_response = MagicMock(side_effect=stream_side_effect)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(
+            side_effect=lambda msgs, sp: msgs
+        )
+
+        with patch("time.sleep", return_value=None):
+            agent.run("trigger timeout retry")
+
+        assert call_count[0] == 2
+        agent._display.show_info.assert_called()
+        info_msgs = [str(call[0][0]) for call in agent._display.show_info.call_args_list]
+        assert any("timed out" in m.lower() or "retrying" in m.lower() for m in info_msgs)
+
 
 # ===================================================================
 # Cost enforcement

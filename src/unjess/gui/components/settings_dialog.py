@@ -393,6 +393,15 @@ def create_settings_dialog(
                         min=0, max=10000000, step=1024,
                     ).props("outlined dense dark").classes("w-full mt-2")
 
+                    llm_timeout_input = ui.number(
+                        label="LLM request timeout (seconds)",
+                        value=getattr(settings, "llm_timeout", 300.0),
+                        min=30, max=3600, step=30,
+                    ).props("outlined dense dark").classes("w-full mt-2")
+                    ui.label(
+                        "Seconds to wait for model response before timing out (default 300s / 5 min)."
+                    ).classes("text-xs text-gray-500 -mt-1")
+
                     # ==========================================================
                     # (d) DISPLAY
                     # ==========================================================
@@ -1325,6 +1334,7 @@ def create_settings_dialog(
                     # (c) Behavior
                     settings.max_iterations = int(max_iter_input.value or 50)
                     settings.command_timeout = int(cmd_timeout_input.value or 30)
+                    settings.llm_timeout = float(llm_timeout_input.value or 300.0)
                     settings.confirm_commands = confirm_toggle.value
                     settings.planning_mode = planning_mode_select.value or "auto"
                     settings.enable_compaction = compaction_toggle.value

@@ -6,6 +6,7 @@ import logging
 import random
 from typing import Any, Generator
 
+import httpx
 from openai import OpenAI
 
 from unjess.llm.base import (
@@ -109,11 +110,17 @@ class OpenAICompatibleProvider(LLMProvider):
         base_url: str = "https://api.openai.com/v1",
         default_model: str = "gpt-4o-mini",
         name: str = "openai",
-        timeout: float = 60.0,
+        timeout: float = 300.0,
     ) -> None:
-        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+        client_timeout = (
+            httpx.Timeout(float(timeout), connect=60.0)
+            if isinstance(timeout, (int, float))
+            else timeout
+        )
+        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=client_timeout)
         self._default_model = default_model
         self._name = name
+        self._timeout = float(timeout) if isinstance(timeout, (int, float)) else 300.0
         self._active_stream: Any = None
         self._aborted: bool = False
 
