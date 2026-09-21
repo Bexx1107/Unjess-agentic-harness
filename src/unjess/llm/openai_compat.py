@@ -114,6 +114,19 @@ class OpenAICompatibleProvider(LLMProvider):
         self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self._default_model = default_model
         self._name = name
+        self._active_stream: Any = None
+        self._aborted: bool = False
+
+    def abort(self) -> None:
+        """Abort the active stream / HTTP connection immediately."""
+        self._aborted = True
+        stream = self._active_stream
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            self._active_stream = None
 
     @property
     def provider_name(self) -> str:
@@ -303,61 +316,78 @@ class OpenAICompatibleProvider(LLMProvider):
             if self._name == "openai" and any(k in model.lower() for k in ("gpt-5", "o1", "o3", "o4", "luna", "reasoning")):
                 kwargs["reasoning_effort"] = "none"
 
+        self._aborted = False
         stream = self._create_completion(**kwargs)
+        self._active_stream = stream
 
         # Accumulate tool calls across chunks (they arrive in pieces)
         pending_tool_calls: dict[int, dict[str, str]] = {}
         usage: Usage | None = None
         full_text = ""
 
-        for chunk in stream:
-            # Usage comes on the final chunk (with stream_options.include_usage)
-            if chunk.usage:
-                thinking_tokens = 0
-                if hasattr(chunk.usage, 'completion_tokens_details') and chunk.usage.completion_tokens_details:
-                    thinking_tokens = getattr(chunk.usage.completion_tokens_details, 'reasoning_tokens', 0) or 0
-                usage = Usage(
-                    prompt_tokens=chunk.usage.prompt_tokens or 0,
-                    completion_tokens=chunk.usage.completion_tokens or 0,
-                    thinking_tokens=thinking_tokens,
-                )
+        try:
+            for chunk in stream:
+                if self._aborted:
+                    break
 
-            if not chunk.choices:
-                continue
+                # Usage comes on the final chunk (with stream_options.include_usage)
+                if chunk.usage:
+                    thinking_tokens = 0
+                    if hasattr(chunk.usage, 'completion_tokens_details') and chunk.usage.completion_tokens_details:
+                        thinking_tokens = getattr(chunk.usage.completion_tokens_details, 'reasoning_tokens', 0) or 0
+                    usage = Usage(
+                        prompt_tokens=chunk.usage.prompt_tokens or 0,
+                        completion_tokens=chunk.usage.completion_tokens or 0,
+                        thinking_tokens=thinking_tokens,
+                    )
 
-            delta = chunk.choices[0].delta
+                if not chunk.choices:
+                    continue
 
-            # Reasoning / Thinking content (e.g., DeepSeek R1 via Ollama)
-            reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-            if reasoning:
-                yield StreamChunk(thinking=reasoning)
+                delta = chunk.choices[0].delta
 
-            # Text content
-            if delta.content:
-                full_text += delta.content
-                yield StreamChunk(text=delta.content)
+                # Reasoning / Thinking content (e.g., DeepSeek R1 via Ollama)
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning:
+                    yield StreamChunk(thinking=reasoning)
 
-            # Tool calls (arrive incrementally)
-            if delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in pending_tool_calls:
-                        pending_tool_calls[idx] = {
-                            "id": tc_delta.id or "",
-                            "name": "",
-                            "arguments": "",
-                        }
-                    if tc_delta.id:
-                        pending_tool_calls[idx]["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            pending_tool_calls[idx]["name"] = tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            pending_tool_calls[idx]["arguments"] += tc_delta.function.arguments
+                # Text content
+                if delta.content:
+                    full_text += delta.content
+                    yield StreamChunk(text=delta.content)
 
-            # Check if finished
-            if chunk.choices[0].finish_reason:
-                break
+                # Tool calls (arrive incrementally)
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in pending_tool_calls:
+                            pending_tool_calls[idx] = {
+                                "id": tc_delta.id or "",
+                                "name": "",
+                                "arguments": "",
+                            }
+                        if tc_delta.id:
+                            pending_tool_calls[idx]["id"] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                pending_tool_calls[idx]["name"] = tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                pending_tool_calls[idx]["arguments"] += tc_delta.function.arguments
+
+                # Check if finished
+                if chunk.choices[0].finish_reason:
+                    break
+        except Exception as exc:
+            if self._aborted or "closed" in str(exc).lower() or type(exc).__name__ in ("StreamClosed", "ResponseClosed"):
+                logger.debug("Stream successfully closed on abort.")
+                return
+            raise
+        finally:
+            self._active_stream = None
+            try:
+                stream.close()
+            except Exception:
+                pass
 
         # Emit accumulated tool calls
         for _idx in sorted(pending_tool_calls):

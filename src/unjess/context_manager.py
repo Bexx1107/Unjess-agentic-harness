@@ -177,11 +177,17 @@ class ContextManager:
         # Exact match
         window = _CONTEXT_WINDOWS.get(clean) or _CONTEXT_WINDOWS.get(self._model)
         if window:
+            # Remote Ollama cloud models (:cloud) should not exceed 64,000 tokens
+            # to avoid severe remote prefill queue delays / TTFT stalls
+            if ":cloud" in self._model.lower() or ":cloud" in clean.lower():
+                return min(window, 64_000)
             return window
 
         # Prefix match
         for key, val in _CONTEXT_WINDOWS.items():
             if clean.startswith(key) or self._model.startswith(key):
+                if ":cloud" in self._model.lower() or ":cloud" in clean.lower():
+                    return min(val, 64_000)
                 return val
 
         # Default
@@ -229,6 +235,11 @@ class ContextManager:
         reserve = int(window * _RESPONSE_RESERVE)
         sys_tokens = count_tokens(system_prompt, self._model)
         budget = window - reserve - sys_tokens
+
+        # For Ollama / local / cloud proxy models, enforce a strict safety ceiling of 48,000 tokens
+        # to ensure conversations never stall remote servers even if compaction was disabled in settings
+        if ":cloud" in self._model.lower() or ":" in self._model:
+            budget = min(budget, 48_000)
 
         if budget <= 0:
             logger.warning("System prompt alone exceeds context budget!")

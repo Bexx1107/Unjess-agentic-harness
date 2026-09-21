@@ -424,8 +424,8 @@ def setup_chat_page(
         ui.notify("Last message unsent", type="info", position="top")
 
     def _stop_generation() -> None:
-        """Abort the running agent by setting the abort flag."""
-        agent._abort_requested = True
+        """Abort the running agent by setting the abort flag and terminating active streams."""
+        agent.abort()
         state.is_thinking = False
         state.dirty = True
         ui.notify("Generation stopped", type="warning", position="top")

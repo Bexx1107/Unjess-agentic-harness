@@ -444,7 +444,7 @@ class GUIDisplay:
         self._add_notification("negative", message)
 
     def show_info(self, message: str) -> None:
-        """Display an informational message inline in the chat.
+        """Display an informational message in the execution trace.
 
         Args:
             message: Info text.
@@ -455,10 +455,11 @@ class GUIDisplay:
             content=message,
             timestamp=time.monotonic(),
         ))
-        self.print_markdown(f"\n\n> ℹ️ {message}\n\n")
+        self._state.dirty = True
+        self._notify()
 
     def show_warning(self, message: str) -> None:
-        """Display a warning message inline in the chat.
+        """Display a warning message in the execution trace and toast notification.
 
         Args:
             message: Warning text.
@@ -470,7 +471,7 @@ class GUIDisplay:
             content=message,
             timestamp=time.monotonic(),
         ))
-        self.print_markdown(f"\n\n> ⚠️ {message}\n\n")
+        self._add_notification("warning", message)
 
     # ----- Statistics -----
 

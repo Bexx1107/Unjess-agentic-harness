@@ -595,3 +595,11 @@ class TestAntiParalysisGuards:
         # And compact() should have been called
         assert compact_mock.called
 
+    def test_agent_abort_calls_router_abort(self) -> None:
+        """Calling agent.abort() sets _abort_requested and invokes router.abort()."""
+        agent = _make_agent()
+        agent._router.abort = MagicMock()
+        agent.abort()
+        assert agent._abort_requested is True
+        agent._router.abort.assert_called_once()
+

@@ -659,3 +659,13 @@ class TestResponseReserve:
         reserve = int(window * _RESPONSE_RESERVE)
         sys_tokens = count_tokens("", "gemma")
         assert budget == window - reserve - sys_tokens
+
+    def test_cloud_model_context_window_capped_at_64k(self) -> None:
+        cm = ContextManager(model="deepseek-v4.1-flash:cloud")
+        assert cm.get_context_window() == 64_000
+
+    def test_cloud_model_truncation_budget_capped_at_48k(self) -> None:
+        cm = ContextManager(model="deepseek-v4.1-flash:cloud")
+        msgs = _make_messages(50, chars_per=2000)  # ~50,000 tokens
+        truncated = cm.truncate_conversation(msgs, "")
+        assert count_messages_tokens(truncated, "deepseek-v4.1-flash:cloud") <= 48_000

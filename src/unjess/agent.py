@@ -714,6 +714,15 @@ class Agent:
             except Exception as exc:
                 logger.debug("Failed to save knowledge graph at end of turn: %s", exc)
 
+    def abort(self) -> None:
+        """Abort the current turn immediately and cancel any active streams."""
+        self._abort_requested = True
+        if hasattr(self._router, "abort"):
+            try:
+                self._router.abort()
+            except Exception as exc:
+                logger.debug("Router abort error: %s", exc)
+
     def clear_history(self) -> None:
         """Clear the conversation history."""
         self._conversation.clear()
@@ -926,54 +935,63 @@ class Agent:
         is_thinking = False
         first_text_chunk = True  # Track if we need a separator
 
-        for chunk in stream:
-            if self._abort_requested:
+        try:
+            for chunk in stream:
+                if self._abort_requested:
+                    if is_thinking:
+                        is_thinking = False
+                        self._display.show_thinking_end()
+                    self._display.show_info("⏹ Generation stopped by user.")
+                    break
+
+                # Handle thinking/reasoning content
+                if chunk.thinking:
+                    if not is_thinking:
+                        is_thinking = True
+                        self._display.show_thinking_start()
+                    thinking_parts.append(chunk.thinking)
+
+                if chunk.text:
+                    # End thinking indicator if we were thinking
+                    if is_thinking:
+                        is_thinking = False
+                        self._display.show_thinking_end()
+                        # Show abbreviated thinking summary
+                        full_thinking = "".join(thinking_parts)
+                        if full_thinking:
+                            self._display.show_thinking(full_thinking)
+
+                    # Visual separator before AI response starts
+                    if first_text_chunk:
+                        self._display.console.print()
+                        first_text_chunk = False
+
+                    self._display.console.print(chunk.text, end="", highlight=False)
+                    text_parts.append(chunk.text)
+
+                if chunk.tool_call:
+                    # End thinking indicator if we were thinking
+                    if is_thinking:
+                        is_thinking = False
+                        self._display.show_thinking_end()
+                        full_thinking = "".join(thinking_parts)
+                        if full_thinking:
+                            self._display.show_thinking(full_thinking)
+                    tool_calls.append(chunk.tool_call)
+
+                if chunk.usage:
+                    usage = chunk.usage
+
+                if chunk.done:
+                    break
+        except Exception as exc:
+            if self._abort_requested or "closed" in str(exc).lower() or type(exc).__name__ in ("StreamClosed", "ResponseClosed"):
                 if is_thinking:
                     is_thinking = False
                     self._display.show_thinking_end()
                 self._display.show_info("⏹ Generation stopped by user.")
-                break
-
-            # Handle thinking/reasoning content
-            if chunk.thinking:
-                if not is_thinking:
-                    is_thinking = True
-                    self._display.show_thinking_start()
-                thinking_parts.append(chunk.thinking)
-
-            if chunk.text:
-                # End thinking indicator if we were thinking
-                if is_thinking:
-                    is_thinking = False
-                    self._display.show_thinking_end()
-                    # Show abbreviated thinking summary
-                    full_thinking = "".join(thinking_parts)
-                    if full_thinking:
-                        self._display.show_thinking(full_thinking)
-
-                # Visual separator before AI response starts
-                if first_text_chunk:
-                    self._display.console.print()
-                    first_text_chunk = False
-
-                self._display.console.print(chunk.text, end="", highlight=False)
-                text_parts.append(chunk.text)
-
-            if chunk.tool_call:
-                # End thinking indicator if we were thinking
-                if is_thinking:
-                    is_thinking = False
-                    self._display.show_thinking_end()
-                    full_thinking = "".join(thinking_parts)
-                    if full_thinking:
-                        self._display.show_thinking(full_thinking)
-                tool_calls.append(chunk.tool_call)
-
-            if chunk.usage:
-                usage = chunk.usage
-
-            if chunk.done:
-                break
+            else:
+                raise
 
         # Handle thinking that continued to the end
         if is_thinking:

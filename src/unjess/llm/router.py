@@ -184,7 +184,7 @@ class ProviderRouter:
                 base_url=ollama_url,
                 default_model="llama3.1",
                 name="ollama",
-                timeout=300.0,
+                timeout=60.0,
             )
         except Exception:
             pass  # Ollama local not available — skip silently
@@ -315,6 +315,15 @@ class ProviderRouter:
         during iteration (not during generator creation).
         """
         return self._stream_with_rotation(messages=messages, tools=tools, model=model)
+
+    def abort(self) -> None:
+        """Abort any ongoing requests or streams across active providers."""
+        for provider in self._providers.values():
+            if hasattr(provider, "abort"):
+                try:
+                    provider.abort()
+                except Exception as exc:
+                    logger.debug("Provider abort error: %s", exc)
 
     def _is_rate_limit(self, exc: Exception) -> bool:
         """Check if an exception is a rate limit / quota exhausted error."""
