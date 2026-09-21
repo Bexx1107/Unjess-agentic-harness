@@ -38,8 +38,8 @@ _MAX_TOOL_RETRIES = 3
 _STUCK_WINDOW = 5  # check last N tool calls for repetition
 _GOAL_MAX_ITERATIONS = 200  # extended limit for /goal mode
 _MAX_TOOL_RESULT_CHARS = 48000  # truncate tool results stored in conversation (~1,200 lines)
-_CONSECUTIVE_READ_NUDGE = 5  # turns of pure reading before injecting a gentle nudge
-_CONSECUTIVE_READ_HARD_LIMIT = 8  # turns of pure reading before halting and forcing synthesis
+_CONSECUTIVE_READ_NUDGE = 10  # turns of pure reading before injecting a gentle nudge
+_CONSECUTIVE_READ_HARD_LIMIT = 20  # turns of pure reading before transitioning to action/synthesis
 
 # Tools safe to execute in parallel (read-only)
 _PARALLEL_SAFE_TOOLS = frozenset({
@@ -622,35 +622,78 @@ class Agent:
                     break
 
                 # Hard limit for consecutive read reconnaissance turns
-                hard_read_limit = (
-                    _CONSECUTIVE_READ_HARD_LIMIT * 2
-                    if self._goal_mode
-                    else _CONSECUTIVE_READ_HARD_LIMIT
-                )
-                if is_pure_read and consecutive_read_turns >= hard_read_limit:
-                    self._display.show_warning(
-                        f"Analysis paralysis detected ({consecutive_read_turns} consecutive read turns). Forcing final synthesis."
+                stuck_enabled = getattr(self._settings, "enable_stuck_detection", True)
+                if not stuck_enabled:
+                    hard_read_limit = 999999
+                elif self._goal_mode:
+                    hard_read_limit = max(_CONSECUTIVE_READ_HARD_LIMIT * 2, self._max_iterations)
+                else:
+                    hard_read_limit = max(
+                        _CONSECUTIVE_READ_HARD_LIMIT,
+                        min(self._max_iterations // 3, 60),
                     )
-                    self._conversation.append({
-                        "role": "user",
-                        "content": (
-                            "[SYSTEM DIRECTIVE: Maximum exploration budget reached. "
-                            "Do NOT call any more tools. Synthesize the findings from the files you inspected "
-                            "and output your implementation plan or answer now.]"
-                        ),
-                    })
-                    final_messages = [{"role": "system", "content": system_prompt}] + self._conversation
-                    try:
-                        final_response = self._stream_response(final_messages, tools=None)
-                        if self._settings.show_stats and final_response.usage:
-                            self._display.show_stats(
-                                final_response.usage.prompt_tokens,
-                                final_response.usage.completion_tokens,
-                                model=final_response.model,
-                            )
-                    except Exception as exc:
-                        logger.debug("Failed to get forced final response: %s", exc)
-                    break
+
+                if is_pure_read and consecutive_read_turns >= hard_read_limit:
+                    action_tools = [
+                        t for t in (self._tools.get_tools() or [])
+                        if t["name"] not in _READ_ONLY_TOOLS
+                    ]
+                    if action_tools:
+                        self._display.show_info(
+                            f"Exploration budget reached ({consecutive_read_turns} read turns). Transitioning to code editing."
+                        )
+                        self._conversation.append({
+                            "role": "user",
+                            "content": (
+                                f"[SYSTEM DIRECTIVE: Maximum exploration budget reached ({consecutive_read_turns} read turns). "
+                                "You have gathered sufficient context from the files inspected. Stop reading and searching files. "
+                                "Proceed immediately to making your code edits (using edit_file, write_file, or run_command) "
+                                "or provide your final answer.]"
+                            ),
+                        })
+                        final_messages = [{"role": "system", "content": system_prompt}] + self._conversation
+                        try:
+                            transition_response = self._stream_response(final_messages, tools=action_tools)
+                            if self._settings.show_stats and transition_response.usage:
+                                self._display.show_stats(
+                                    transition_response.usage.prompt_tokens,
+                                    transition_response.usage.completion_tokens,
+                                    model=transition_response.model,
+                                )
+                            if transition_response.tool_calls:
+                                # Reset consecutive read turns since action tools are being invoked
+                                consecutive_read_turns = 0
+                                consecutive_errors = self._handle_tool_calls(
+                                    transition_response, consecutive_errors, consecutive_read_turns=0
+                                )
+                                continue
+                        except Exception as exc:
+                            logger.debug("Failed during transition to action tools: %s", exc)
+                        break
+                    else:
+                        self._display.show_warning(
+                            f"Analysis paralysis detected ({consecutive_read_turns} consecutive read turns). Forcing final synthesis."
+                        )
+                        self._conversation.append({
+                            "role": "user",
+                            "content": (
+                                "[SYSTEM DIRECTIVE: Maximum exploration budget reached. "
+                                "Do NOT call any more tools. Synthesize the findings from the files you inspected "
+                                "and output your implementation plan or answer now.]"
+                            ),
+                        })
+                        final_messages = [{"role": "system", "content": system_prompt}] + self._conversation
+                        try:
+                            final_response = self._stream_response(final_messages, tools=None)
+                            if self._settings.show_stats and final_response.usage:
+                                self._display.show_stats(
+                                    final_response.usage.prompt_tokens,
+                                    final_response.usage.completion_tokens,
+                                    model=final_response.model,
+                                )
+                        except Exception as exc:
+                            logger.debug("Failed to get forced final response: %s", exc)
+                        break
 
                 # Stuck detection
                 if self._is_stuck():

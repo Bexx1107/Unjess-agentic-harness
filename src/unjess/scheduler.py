@@ -199,7 +199,9 @@ class Scheduler:
         schedules_file: Optional[Path] = None,
     ) -> None:
         self._check_interval = check_interval
-        self._schedules_file = schedules_file or (Path.home() / ".unjess" / "schedules.json")
+        import os
+        env_file = os.environ.get("UNJESS_SCHEDULES_FILE")
+        self._schedules_file = schedules_file or (Path(env_file) if env_file else Path.home() / ".unjess" / "schedules.json")
         self._tasks: dict[str, ScheduledTask] = {}
         self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
@@ -387,9 +389,11 @@ class Scheduler:
                 return True
         return False
 
-    def list_tasks(self) -> list[ScheduledTask]:
-        """List all tasks (active or paused)."""
+    def list_tasks(self, only_active: bool = False) -> list[ScheduledTask]:
+        """List tasks (all by default, or only active if only_active=True)."""
         with self._lock:
+            if only_active:
+                return [t for t in self._tasks.values() if t.is_active]
             return list(self._tasks.values())
 
     # ----- Internal -----

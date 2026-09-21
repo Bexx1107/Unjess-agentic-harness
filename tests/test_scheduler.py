@@ -317,7 +317,7 @@ class TestScheduler:
         id1 = sched.schedule_timer(100, prompt="active")
         id2 = sched.schedule_timer(100, prompt="will cancel")
         sched.cancel(id2)
-        active = sched.list_tasks()
+        active = sched.list_tasks(only_active=True)
         assert len(active) == 1
         assert active[0].id == id1
         sched.stop()

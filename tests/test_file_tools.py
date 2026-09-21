@@ -167,13 +167,13 @@ class TestReadFile:
         result = _read_file(tmp_workspace, "README.md", start_line=9999)
         assert "Error: start_line 9999 exceeds file length" in result
 
-    def test_read_caps_at_500_lines(self, tmp_workspace: Path) -> None:
+    def test_read_caps_at_1000_lines(self, tmp_workspace: Path) -> None:
         _reset_file_tools_globals(tmp_workspace)
         big_file = tmp_workspace / "big.txt"
-        big_file.write_text("\n".join(f"Line {i}" for i in range(1000)), encoding="utf-8")
+        big_file.write_text("\n".join(f"Line {i}" for i in range(1500)), encoding="utf-8")
         result = _read_file(tmp_workspace, "big.txt")
-        # Should show 500 lines, not 1000
-        assert "showing 1-500" in result
+        # Should show 1000 lines, not 1500
+        assert "showing 1-1000" in result
 
     def test_read_empty_file(self, tmp_workspace: Path) -> None:
         _reset_file_tools_globals(tmp_workspace)

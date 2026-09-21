@@ -437,25 +437,25 @@ class TestAntiParalysisGuards:
 
     def test_consecutive_read_nudge_injected(self) -> None:
         """When an agent executes pure read calls for N consecutive turns, a nudge is injected."""
-        settings = _make_settings(max_iterations=10)
+        settings = _make_settings(max_iterations=20)
         agent = _make_agent(settings=settings)
 
         # Mock tools so read_file returns content
         agent._tools.execute = MagicMock(return_value="file contents line 1\nline 2")
 
-        # Create responses: 5 consecutive turns of read_file, then a stop
+        # Create responses: 10 consecutive turns of read_file, then a stop
         turn_count = [0]
 
         def fake_stream(messages, tools):
             turn_count[0] += 1
-            if turn_count[0] <= 5:
+            if turn_count[0] <= 10:
                 return LLMResponse(
                     text="",
                     tool_calls=[ToolCall(id=f"c{turn_count[0]}", name="read_file", arguments={"path": f"foo{turn_count[0]}.py"})],
                     model="test-model",
                     usage=Usage(prompt_tokens=5, completion_tokens=5),
                 )
-            # 6th turn: returns final text
+            # 11th turn: returns final text
             return LLMResponse(
                 text="Here is the answer based on foo files.",
                 tool_calls=[],
@@ -469,16 +469,16 @@ class TestAntiParalysisGuards:
 
         agent.run("Inspect the codebase")
 
-        # Turn 5 tool result should contain the nudge directive
+        # Turn 10 tool result should contain the nudge directive
         tool_msgs = [m for m in agent.conversation if m.get("role") == "tool"]
-        assert len(tool_msgs) >= 5
-        last_nudge_msg = tool_msgs[4]["content"]
+        assert len(tool_msgs) >= 10
+        last_nudge_msg = tool_msgs[9]["content"]
         assert "SYSTEM NOTICE" in last_nudge_msg
         assert "consecutive rounds of file reading" in last_nudge_msg
 
     def test_consecutive_read_hard_limit_forces_synthesis(self) -> None:
-        """When consecutive read turns reach hard limit, loop halts and forces synthesis without tools."""
-        settings = _make_settings(max_iterations=20)
+        """When consecutive read turns reach hard limit and no action tools exist, loop forces synthesis without tools."""
+        settings = _make_settings(max_iterations=30)
         agent = _make_agent(settings=settings)
         agent._tools.execute = MagicMock(return_value="sample content")
 
@@ -507,6 +507,62 @@ class TestAntiParalysisGuards:
 
         # The final call to _stream_response must have tools=None (forcing synthesis text)
         assert tools_passed_to_stream[-1] is None
+
+    def test_consecutive_read_hard_limit_transitions_to_action_tools(self) -> None:
+        """When hard read limit is reached but action tools exist, agent transitions to action tools instead of halting."""
+        settings = _make_settings(max_iterations=30)
+        registry = ToolRegistry()
+        registry.register("read_file", "Read file", {"type": "object", "properties": {"path": {"type": "string"}}}, lambda **kw: "content")
+        registry.register("edit_file", "Edit file", {"type": "object", "properties": {"path": {"type": "string"}}}, lambda **kw: "edited")
+
+        agent = _make_agent(settings=settings, tool_registry=registry)
+        tools_passed = []
+
+        def fake_stream(messages, tools):
+            tools_passed.append(tools)
+            if len(tools_passed) <= 20:
+                resp = LLMResponse(
+                    text="",
+                    tool_calls=[ToolCall(id=f"c{len(tools_passed)}", name="read_file", arguments={"path": f"f_{len(tools_passed)}.py"})],
+                    model="test-model",
+                    usage=Usage(prompt_tokens=5, completion_tokens=5),
+                )
+            elif len(tools_passed) == 21:
+                # Transition turn: model invokes edit_file using available action tools
+                resp = LLMResponse(
+                    text="",
+                    tool_calls=[ToolCall(id="edit_call", name="edit_file", arguments={"path": "f_1.py"})],
+                    model="test-model",
+                    usage=Usage(prompt_tokens=5, completion_tokens=5),
+                )
+            else:
+                resp = LLMResponse(
+                    text="Completed the edits successfully.",
+                    tool_calls=[],
+                    model="test-model",
+                    usage=Usage(prompt_tokens=5, completion_tokens=5),
+                )
+            agent._conversation.append({"role": "assistant", "content": resp.text})
+            return resp
+
+        agent._stream_response = MagicMock(side_effect=fake_stream)
+        agent._context_manager.needs_compaction = MagicMock(return_value=False)
+        agent._context_manager.truncate_conversation = MagicMock(side_effect=lambda msgs, sp: msgs)
+
+        agent.run("Refactor files")
+
+        # Turn 21 must only be offered action tools (edit_file), read_file must be excluded
+        transition_tools = tools_passed[20]
+        assert transition_tools is not None
+        tool_names = [t["name"] for t in transition_tools]
+        assert "edit_file" in tool_names
+        assert "read_file" not in tool_names
+
+        # The loop continued and executed the edit instead of dying
+        tool_msgs = [m for m in agent.conversation if m.get("role") == "tool"]
+        assert any("edited" in m["content"] for m in tool_msgs)
+        # Agent finished with final response
+        assert any("Completed the edits successfully." in m.get("content", "") for m in agent.conversation if m.get("role") == "assistant")
 
     def test_repeated_file_path_read_loop_guard(self) -> None:
         """Reading multiple different slices of a file is permitted up to threshold (6), then blocked."""

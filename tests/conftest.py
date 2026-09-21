@@ -253,3 +253,11 @@ class MockLLMProvider:
 def mock_llm() -> MockLLMProvider:
     """Fixture returning a MockLLMProvider."""
     return MockLLMProvider()
+
+
+@pytest.fixture(autouse=True)
+def isolate_test_schedules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure tests never read or write user's ~/.unjess/schedules.json."""
+    test_sched = tmp_path / "test_schedules.json"
+    monkeypatch.setenv("UNJESS_SCHEDULES_FILE", str(test_sched))
+

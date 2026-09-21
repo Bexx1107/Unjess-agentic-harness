@@ -118,7 +118,8 @@ class TestRunCommandCwd:
     def test_cwd_outside_workspace_blocked(self, tmp_workspace: Path) -> None:
         _reset_file_tools_globals(tmp_workspace)
         pm = _make_permission_manager()
-        result = _run_command(tmp_workspace, pm, None, _echo_cmd("test"), cwd="..")
+        outside_dir = "C:\\Windows" if platform.system() == "Windows" else "/var"
+        result = _run_command(tmp_workspace, pm, None, _echo_cmd("test"), cwd=outside_dir)
         assert "Error" in result
         assert "outside the workspace" in result
 
