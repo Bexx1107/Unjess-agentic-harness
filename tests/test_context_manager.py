@@ -496,6 +496,21 @@ class TestNeedsCompaction:
         msgs = [_msg("user", "hello")]
         assert cm.needs_compaction("sys", msgs) is False
 
+    def test_large_window_does_not_prematurely_compact(self) -> None:
+        """A 1M context model does not compact at 80k tokens."""
+        cm = ContextManager(model="deepseek-v4.1-flash", context_window_override=1_000_000)
+        # 100k tokens of conversation (well below 800k threshold for 1M)
+        msgs = [_msg("user", "x" * 400_000)]
+        assert cm.needs_compaction("sys", msgs) is False
+
+    def test_truncate_conversation_respects_large_window_override(self) -> None:
+        """A model with :cloud tag but 1M override does not clamp budget to 48k."""
+        cm = ContextManager(model="deepseek-v4.1-flash:cloud", context_window_override=1_000_000)
+        # 60k tokens of conversation
+        msgs = [_msg("user", "first message"), _msg("assistant", "x" * 240_000)]
+        truncated = cm.truncate_conversation(msgs, "sys")
+        assert len(truncated) == 2  # Not truncated down to 48k
+
 
 # ===========================================================================
 # ContextManager — modes

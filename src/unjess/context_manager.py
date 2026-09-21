@@ -61,9 +61,11 @@ _CONTEXT_WINDOWS: dict[str, int] = {
     "llama3.1": 128_000,
     "deepseek-coder": 16_384,
     # DeepSeek
-    "deepseek-v4.1": 128_000,
+    "deepseek-v4.1-flash": 1_000_000,
+    "deepseek-v4.1": 1_000_000,
+    "deepseek-v4-flash": 1_000_000,
+    "deepseek-v4-pro": 128_000,
     "deepseek-v4": 128_000,
-    "deepseek-v4-flash": 128_000,
     "deepseek-v3": 128_000,
     "deepseek-r1": 128_000,
     "deepseek-chat": 128_000,
@@ -142,7 +144,7 @@ class ContextManager:
         self,
         model: str = "",
         auto_compact_threshold: float = 0.80,
-        max_conversation_tokens: int = 80_000,
+        max_conversation_tokens: Optional[int] = None,
         context_window_override: int = 0,
         enable_compaction: bool = True,
     ) -> None:
@@ -177,8 +179,7 @@ class ContextManager:
         # Exact match
         window = _CONTEXT_WINDOWS.get(clean) or _CONTEXT_WINDOWS.get(self._model)
         if window:
-            # Remote Ollama cloud models (:cloud) should not exceed 64,000 tokens
-            # to avoid severe remote prefill queue delays / TTFT stalls
+            # Remote Ollama cloud models (:cloud) default to 64,000 tokens when no override is set
             if ":cloud" in self._model.lower() or ":cloud" in clean.lower():
                 return min(window, 64_000)
             return window
@@ -236,10 +237,12 @@ class ContextManager:
         sys_tokens = count_tokens(system_prompt, self._model)
         budget = window - reserve - sys_tokens
 
-        # For Ollama / local / cloud proxy models, enforce a strict safety ceiling of 48,000 tokens
-        # to ensure conversations never stall remote servers even if compaction was disabled in settings
-        if ":cloud" in self._model.lower() or ":" in self._model:
-            budget = min(budget, 48_000)
+        # For small local Ollama models (<=128k), enforce a safety ceiling of 48,000 tokens
+        # to ensure conversations never stall low-memory servers. Never enforce this if the
+        # user explicitly set context_window_override or if the model has a large context window (>128k).
+        if self._context_window_override <= 0 and window <= 128_000:
+            if ":cloud" in self._model.lower() or ":" in self._model:
+                budget = min(budget, 48_000)
 
         if budget <= 0:
             logger.warning("System prompt alone exceeds context budget!")
@@ -505,9 +508,19 @@ class ContextManager:
         breakdown = self.get_context_breakdown(system_prompt, messages)
         utilization = breakdown.get("utilization_pct", 0) / 100.0
 
-        # Dynamic hard cap: 60% of model's context window or max_conversation_tokens
+        # Dynamic hard cap:
+        # If max_conversation_tokens was explicitly specified (e.g. in tests), use it directly.
+        # Otherwise, scale with the context window: for large windows (>128k) or overrides,
+        # allow conversation up to auto_compact_threshold (e.g. 80% = 800k tokens for 1M context),
+        # avoiding premature compaction at small 80k token limits.
         window = self.get_context_window()
-        effective_max = min(self._max_conversation_tokens, int(window * 0.6))
+        if self._max_conversation_tokens is not None:
+            effective_max = self._max_conversation_tokens
+        elif self._context_window_override > 0 or window > 128_000:
+            effective_max = int(window * self._auto_compact_threshold)
+        else:
+            effective_max = min(80_000, int(window * 0.7))
+
         conv_tokens = breakdown.get("conversation_tokens", 0)
         if conv_tokens > effective_max:
             logger.info(
