@@ -743,6 +743,14 @@ def setup_chat_page(
 
         state.dirty = True
 
+        # Auto-close left drawer on mobile after selecting a conversation
+        ui.run_javascript("""
+            if (window.innerWidth <= 768) {
+                const closeBtn = document.querySelector('.drawer-close-btn-left');
+                if (closeBtn) closeBtn.click();
+            }
+        """)
+
     # Mutable ref so _refresh can find the container after it's created
     _browser_ref: dict[str, Any] = {}
 
@@ -768,28 +776,96 @@ def setup_chat_page(
         max-width: 100% !important;
         overflow-x: hidden !important;
     }
-    /* Drawer resize — CSS custom properties enforced over Quasar */
-    :root {
-        --njss-left-w: 220px;
-        --njss-right-w: 260px;
+    /* Desktop Drawer resize — CSS custom properties enforced over Quasar ONLY on desktop */
+    @media (min-width: 769px) {
+        :root {
+            --njss-left-w: 220px;
+            --njss-right-w: 260px;
+        }
+        .q-drawer--left {
+            width: var(--njss-left-w) !important;
+        }
+        .q-drawer--right {
+            width: var(--njss-right-w) !important;
+        }
+        .q-header {
+            left: var(--njss-left-w) !important;
+            right: var(--njss-right-w) !important;
+        }
+        .q-footer {
+            left: var(--njss-left-w) !important;
+            right: var(--njss-right-w) !important;
+        }
+        .q-page-container {
+            padding-left: var(--njss-left-w) !important;
+            padding-right: var(--njss-right-w) !important;
+        }
     }
-    .q-drawer--left {
-        width: var(--njss-left-w) !important;
-    }
-    .q-drawer--right {
-        width: var(--njss-right-w) !important;
-    }
-    .q-header {
-        left: var(--njss-left-w) !important;
-        right: var(--njss-right-w) !important;
-    }
-    .q-footer {
-        left: var(--njss-left-w) !important;
-        right: var(--njss-right-w) !important;
-    }
-    .q-page-container {
-        padding-left: var(--njss-left-w) !important;
-        padding-right: var(--njss-right-w) !important;
+
+    /* Mobile overrides (<= 768px) */
+    @media (max-width: 768px) {
+        :root {
+            --njss-left-w: 0px !important;
+            --njss-right-w: 0px !important;
+        }
+        .q-header {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            width: 100% !important;
+            padding-top: max(env(safe-area-inset-top, 0px), 8px) !important;
+            padding-bottom: 6px !important;
+            padding-left: max(env(safe-area-inset-left, 0px), 8px) !important;
+            padding-right: max(env(safe-area-inset-right, 0px), 8px) !important;
+            min-height: calc(48px + max(env(safe-area-inset-top, 0px), 0px)) !important;
+            z-index: 6000 !important;
+        }
+        .q-footer {
+            position: fixed !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            width: 100% !important;
+            padding-top: 8px !important;
+            padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px) !important;
+            padding-left: max(env(safe-area-inset-left, 0px), 8px) !important;
+            padding-right: max(env(safe-area-inset-right, 0px), 8px) !important;
+            z-index: 5000 !important;
+        }
+        .q-page-container {
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+            padding-top: calc(52px + max(env(safe-area-inset-top, 0px), 0px)) !important;
+            padding-bottom: calc(140px + max(env(safe-area-inset-bottom, 0px), 0px)) !important;
+        }
+        .q-drawer {
+            top: calc(48px + max(env(safe-area-inset-top, 0px), 0px)) !important;
+            height: calc(100% - 48px - max(env(safe-area-inset-top, 0px), 0px)) !important;
+            width: min(85vw, 320px) !important;
+            max-width: 85vw !important;
+            z-index: 5500 !important;
+        }
+        .q-drawer--left, .q-drawer--right {
+            width: min(85vw, 320px) !important;
+            max-width: 85vw !important;
+        }
+        .q-drawer__backdrop {
+            top: calc(48px + max(env(safe-area-inset-top, 0px), 0px)) !important;
+            z-index: 5499 !important;
+            background: rgba(0, 0, 0, 0.65) !important;
+        }
+        .drawer-resize-handle-left,
+        .drawer-resize-handle-right {
+            display: none !important;
+        }
+        .header-toggle-btn {
+            min-width: 44px !important;
+            min-height: 44px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
     }
     </style>
     ''')
@@ -814,64 +890,90 @@ def setup_chat_page(
     # HEADER — breadcrumb bar
     # ══════════════════════════════════════════════════════════════════
     with ui.header().classes(
-        "items-center no-wrap px-5 py-1"
+        "items-center no-wrap px-4 py-1"
     ).style("background: #0d0d0d; border-bottom: 1px solid #222; box-shadow: none"):
         left_toggle = ui.button(icon="menu", on_click=lambda: _toggle_left()).props(
             "flat dense round"
-        ).classes("text-gray-500")
+        ).classes("text-gray-400 header-toggle-btn")
         ws = state.workspace or ""
         ws_name = ws.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1] if ws else "Quick Chat"
-        _header_ws_label = ui.label(ws_name).classes("text-sm text-gray-400 font-medium ml-2")
+        _header_ws_label = ui.label(ws_name).classes("text-sm text-gray-400 font-medium ml-1 truncate")
         ui.space()
         model_text = state.model or "no model"
         prov_text = f"({state.provider})" if state.provider else ""
         _header_model_label = ui.label(f"{model_text} {prov_text}").classes(
-            "text-xs text-gray-600 font-mono"
+            "text-xs text-gray-600 font-mono truncate"
         )
         right_toggle = ui.button(icon="info", on_click=lambda: _toggle_right()).props(
             "flat dense round"
-        ).classes("text-gray-500")
+        ).classes("text-gray-400 header-toggle-btn")
 
     # Track drawer widths so we can restore them after toggle
     _left_drawer_w = 220
     _right_drawer_w = 260
 
+    def _on_left_show() -> None:
+        left_drawer.value = True
+        ui.run_javascript(f"""
+            if (window.innerWidth > 768) {{
+                document.documentElement.style.setProperty('--njss-left-w', '{_left_drawer_w}px');
+            }}
+        """)
+
+    def _on_left_hide() -> None:
+        left_drawer.value = False
+        ui.run_javascript("""
+            if (window.innerWidth > 768) {
+                document.documentElement.style.setProperty('--njss-left-w', '0px');
+            }
+        """)
+
+    def _on_right_show() -> None:
+        right_drawer.value = True
+        ui.run_javascript(f"""
+            if (window.innerWidth > 768) {{
+                document.documentElement.style.setProperty('--njss-right-w', '{_right_drawer_w}px');
+            }}
+        """)
+
+    def _on_right_hide() -> None:
+        right_drawer.value = False
+        ui.run_javascript("""
+            if (window.innerWidth > 768) {
+                document.documentElement.style.setProperty('--njss-right-w', '0px');
+            }
+        """)
+
     def _toggle_left() -> None:
         """Toggle left drawer and update header/footer CSS offsets."""
-        nonlocal _left_drawer_w
+        # On mobile, close right drawer if open
+        ui.run_javascript("""
+            if (window.innerWidth <= 768) {
+                const closeBtn = document.querySelector('.drawer-close-btn-right');
+                if (closeBtn) closeBtn.click();
+            }
+        """)
         left_drawer.toggle()
-        # After toggle, the drawer value flips
-        if left_drawer.value:
-            # Drawer is now visible — restore saved width
-            ui.run_javascript(
-                f"document.documentElement.style.setProperty('--njss-left-w', '{_left_drawer_w}px')"
-            )
-        else:
-            # Drawer is now hidden — collapse to 0
-            # Save current width first
-            ui.run_javascript(
-                "document.documentElement.style.setProperty('--njss-left-w', '0px')"
-            )
 
     def _toggle_right() -> None:
         """Toggle right drawer and update header/footer CSS offsets."""
-        nonlocal _right_drawer_w
+        # On mobile, close left drawer if open
+        ui.run_javascript("""
+            if (window.innerWidth <= 768) {
+                const closeBtn = document.querySelector('.drawer-close-btn-left');
+                if (closeBtn) closeBtn.click();
+            }
+        """)
         right_drawer.toggle()
-        if right_drawer.value:
-            ui.run_javascript(
-                f"document.documentElement.style.setProperty('--njss-right-w', '{_right_drawer_w}px')"
-            )
-        else:
-            ui.run_javascript(
-                "document.documentElement.style.setProperty('--njss-right-w', '0px')"
-            )
 
     # ══════════════════════════════════════════════════════════════════
     # LEFT DRAWER — navigation sidebar
     # ══════════════════════════════════════════════════════════════════
     left_drawer = ui.left_drawer(
-        fixed=True, top_corner=True, bottom_corner=True, value=True
-    ).props("width=220 bordered breakpoint=0").classes("flex flex-col p-0").style("background: #111; overflow: hidden")
+        fixed=True, top_corner=True, bottom_corner=True
+    ).props("width=220 bordered breakpoint=768 show-if-above").classes("flex flex-col p-0").style("background: #111; overflow: hidden")
+    left_drawer.on("show", _on_left_show)
+    left_drawer.on("hide", _on_left_hide)
 
     # --- Drag handle for resizing the left drawer ---
     with left_drawer:
@@ -893,6 +995,7 @@ def setup_chat_page(
             let dragging = false, startX = 0, startW = 0;
             const aside = h.closest('aside.q-drawer');
             h.addEventListener('mousedown', (e) => {
+                if (window.innerWidth <= 768) return;
                 dragging = true; h._dragging = true;
                 startX = e.clientX;
                 startW = aside ? aside.offsetWidth : (side === 'left' ? 220 : 260);
@@ -902,7 +1005,7 @@ def setup_chat_page(
                 e.preventDefault();
             });
             document.addEventListener('mousemove', (e) => {
-                if (!dragging) return;
+                if (!dragging || window.innerWidth <= 768) return;
                 let newW;
                 if (side === 'left') {
                     newW = Math.max(160, Math.min(500, startW + e.clientX - startX));
@@ -934,13 +1037,19 @@ def setup_chat_page(
     ''')
     with left_drawer:
 
-        # Logo: mark + "Unjess" in sidebar header
-        with ui.row().classes("items-center px-4 pt-5 pb-4 gap-2 no-wrap"):
-            ui.image("/assets/icon_mark_white.svg").style(
-                "width: 24px; height: 24px;"
-            )
-            ui.label("Unjess").classes(
-                "text-lg font-extrabold tracking-wide text-gray-200"
+        # Logo: mark + "Unjess" in sidebar header + mobile close button
+        with ui.row().classes("items-center justify-between px-4 pt-5 pb-4 gap-2 no-wrap w-full"):
+            with ui.row().classes("items-center gap-2 no-wrap"):
+                ui.image("/assets/icon_mark_white.svg").style(
+                    "width: 24px; height: 24px;"
+                )
+                ui.label("Unjess").classes(
+                    "text-lg font-extrabold tracking-wide text-gray-200"
+                )
+            ui.button(icon="close", on_click=lambda: left_drawer.hide()).props(
+                "flat dense round"
+            ).classes("drawer-close-btn-left text-gray-400 md:hidden").style(
+                "min-width: 40px; min-height: 40px;"
             )
 
         # New Conversation dialog
@@ -984,8 +1093,10 @@ def setup_chat_page(
     # RIGHT DRAWER — status & tools
     # ══════════════════════════════════════════════════════════════════
     right_drawer = ui.right_drawer(
-        fixed=True, top_corner=True, bottom_corner=True, value=True
-    ).props("width=260 bordered breakpoint=0").classes("flex flex-col p-0").style("background: #111; overflow: hidden")
+        fixed=True, top_corner=True, bottom_corner=True
+    ).props("width=260 bordered breakpoint=768 show-if-above").classes("flex flex-col p-0").style("background: #111; overflow: hidden")
+    right_drawer.on("show", _on_right_show)
+    right_drawer.on("hide", _on_right_hide)
 
     # --- Drag handle for resizing the right drawer ---
     with right_drawer:
@@ -998,6 +1109,14 @@ def setup_chat_page(
             (e) => { if (!e.target._dragging) e.target.style.background = 'transparent'; }
         """)
     with right_drawer:
+        # Mobile-only header with close button
+        with ui.row().classes("items-center justify-between px-4 pt-4 pb-2 w-full md:hidden"):
+            ui.label("Session & Tools").classes("text-sm font-semibold text-gray-300")
+            ui.button(icon="close", on_click=lambda: right_drawer.hide()).props(
+                "flat dense round"
+            ).classes("drawer-close-btn-right text-gray-400").style(
+                "min-width: 40px; min-height: 40px;"
+            )
         with ui.scroll_area().classes("w-full flex-grow"):
             session_panel_container = ui.column().classes("w-full p-4 gap-0")
             with session_panel_container:

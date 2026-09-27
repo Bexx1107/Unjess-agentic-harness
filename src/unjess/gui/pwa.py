@@ -14,8 +14,8 @@ _MANIFEST_CONTENT = {
     "description": "Full-featured AI Coding Agent — Mobile Companion",
     "start_url": "/",
     "display": "standalone",
-    "background_color": "#121212",
-    "theme_color": "#121212",
+    "background_color": "#0d0d0d",
+    "theme_color": "#0d0d0d",
     "orientation": "any",
     "icons": [
         {
@@ -39,7 +39,7 @@ self.addEventListener('activate', (event) => {
 
 _PWA_HEAD_HTML = """
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#121212">
+<meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
